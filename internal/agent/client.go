@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -35,7 +36,23 @@ type Client struct {
 // gateway may replay room events before processing the new hello, so those
 // frames are retained for the first Read call instead of being discarded.
 func Dial(url, room, id string, caps []string) (*Client, error) {
-	c, _, err := websocket.DefaultDialer.Dial(url+"?room_id="+room, nil)
+	return dial(url, room, id, caps, "")
+}
+
+// DialWithToken is the authenticated variant of Dial. The token is sent only
+// as a Bearer Authorization header during the websocket handshake; it is not
+// included in protocol messages or persisted by the client.
+func DialWithToken(url, room, id string, caps []string, token string) (*Client, error) {
+	return dial(url, room, id, caps, token)
+}
+
+func dial(url, room, id string, caps []string, token string) (*Client, error) {
+	var headers http.Header
+	if token != "" {
+		headers = make(http.Header)
+		headers.Set("Authorization", "Bearer "+token)
+	}
+	c, _, err := websocket.DefaultDialer.Dial(url+"?room_id="+room, headers)
 	if err != nil {
 		return nil, err
 	}

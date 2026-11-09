@@ -108,6 +108,28 @@ func TestTwoAgentsAndLocalDataPlane(t *testing.T) {
 	}
 }
 
+func TestDialWithToken(t *testing.T) {
+	t.Setenv("GOOSECAB_AGENT_TOKEN", "test-token")
+	s, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := (&gateway.WS{Store: s, Bus: eventbus.New()}).Handler(http.NotFoundHandler())
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	url := "ws" + srv.URL[4:] + "/api/v1/agent/connect"
+
+	authClient, err := DialWithToken(url, "auth", "agent-auth", nil, "test-token")
+	if err != nil {
+		t.Fatalf("authenticated dial: %v", err)
+	}
+	defer authClient.Close()
+	if _, err := Dial(url, "auth", "agent-no-token", nil); err == nil {
+		t.Fatal("unauthenticated dial unexpectedly succeeded")
+	}
+}
+
 func readExpectedEvents(t *testing.T, c *Client, expected map[string]struct{}) map[string]map[string]any {
 	t.Helper()
 	seen := make(map[string]map[string]any, len(expected))
