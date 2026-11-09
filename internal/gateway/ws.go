@@ -44,6 +44,8 @@ func (w *WS) Handler(h http.Handler) http.Handler { return http.HandlerFunc(func
             var v protocol.CapabilityProgress; b,_:=json.Marshal(msg); if json.Unmarshal(b,&v)==nil { publish("capability.progress","",v.RequestID,v) }
         case "capability.result":
             var v protocol.CapabilityResult; b,_:=json.Marshal(msg); if json.Unmarshal(b,&v)==nil { publish("capability.result","",v.RequestID,v) }
+        case "transfer.request", "transfer.accepted", "transfer.progress", "transfer.completed", "transfer.failed":
+            corr,_:=msg["file_id"].(string); if corr=="" { corr,_=msg["transfer_id"].(string) }; publish(typ,"",corr,msg)
         case "event.publish":
             if raw,ok:=msg["event"];ok { b,_:=json.Marshal(raw); var evt protocol.Event; if json.Unmarshal(b,&evt)==nil && evt.RoomID!="" && evt.Type!="" { seq,e:=w.Store.NextSeq(r.Context(),evt.RoomID); if e==nil {evt.Seq=seq;if evt.EventID==""{evt.EventID=evt.Type+"-"+strconv.FormatInt(seq,10)};if evt.TS.IsZero(){evt.TS=time.Now().UTC()};if w.Store.Append(r.Context(),evt)==nil{w.Bus.Publish(evt)}} } }
         }
