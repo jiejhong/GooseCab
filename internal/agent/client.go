@@ -17,3 +17,6 @@ func(c *Client)Read() (map[string]any,error){var v map[string]any;e:=c.Conn.Read
 func(c *Client)Close()error{return c.Conn.Close()}
 // CopyLocal is the data-plane primitive used by direct or relay implementations. The gateway sees only metadata.
 func CopyLocal(src,dst string)(size int64,sha string,err error){in,e:=os.Open(src);if e!=nil{return 0,"",e};defer in.Close();out,e:=os.Create(dst);if e!=nil{return 0,"",e};h:=sha256.New();n,e:=io.Copy(io.MultiWriter(out,h),in);if ce:=out.Close();e==nil{e=ce};return n,hex.EncodeToString(h.Sum(nil)),e}
+
+// CopyWithMode validates the selected signaling path; bytes still stay local to the Agents.
+func CopyWithMode(mode, src, dst string) (int64, string, error) { if mode != "direct" && mode != "relay" { return 0, "", fmt.Errorf("unsupported transfer mode: %s", mode) }; return CopyLocal(src, dst) }
