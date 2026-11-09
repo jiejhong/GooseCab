@@ -14,6 +14,8 @@
 
 ## P2：多 Agent 协作网络
 
+已加入最小编排骨架：Planner/Capability Resolver、Task DAG、重试/换 Agent、公共黑板、私有会话元数据和 Provider Adapter 接口；后续接入真正并发调度与结果编排。
+
 加入 Planner、Capability Resolver、任务 DAG、并发/重试、公共黑板、私有会话、结果编排、多房间、Provider Adapter、Relay 网络化、观测和能力治理。
 
 验收：给定一个目标，系统自动选择多个 Agent 并行协作，失败可重试、换 Agent 或人工接管，全过程可回放。

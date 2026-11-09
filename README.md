@@ -12,7 +12,13 @@
 
 ## 开发状态
 
-P0 已完成核心骨架；P1 最小闭环已加入：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态及版本回滚元数据。
+P0 已完成核心骨架；P1 最小闭环已加入：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态及版本回滚元数据。P2 最小编排骨架也已加入：Planner/Capability Resolver、Task DAG、重试换 Agent、公共黑板、私有会话和 Provider Adapter 接口。
+
+## P2 API（元数据）
+
+- `POST /api/plans`、`POST /api/tasks`、`POST /api/tasks/{id}/retry`：创建计划、DAG 任务并重试/换 Agent。
+- `GET /api/capability-resolve?q=`：从 Registry 查找候选 Agent。
+- `POST /api/blackboards`、`POST /api/private-sessions`：公共黑板和私有会话元数据。
 
 ## P1 API（元数据）
 
