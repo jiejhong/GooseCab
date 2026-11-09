@@ -1,5 +1,5 @@
 package gateway
-import("encoding/json";"net/http";"strings";"github.com/jiejhong/GooseCab/internal/p2")
+import("net/http";"strings";"github.com/jiejhong/GooseCab/internal/p2")
 type P2API struct{Service *p2.Service}
 func(a *P2API)Handler(next http.Handler)http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){p:=strings.TrimSuffix(r.URL.Path,"/");switch{case p=="/api/plans":a.plan(w,r);case p=="/api/tasks":a.task(w,r,p);case strings.HasPrefix(p,"/api/tasks/"):a.task(w,r,p);case p=="/api/capability-resolve":a.resolve(w,r);case p=="/api/blackboards":a.board(w,r);case p=="/api/private-sessions":a.session(w,r);default:next.ServeHTTP(w,r)}})}
 func(a *P2API)plan(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.NotFound(w,r);return};var v p2.Plan;if !decode(w,r,&v){return};x,e:=a.Service.CreatePlan(r.Context(),v);if e!=nil{http.Error(w,e.Error(),500);return};w.WriteHeader(201);out(w,x)}
