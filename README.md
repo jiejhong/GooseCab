@@ -2,15 +2,22 @@
 
 多 Agent 能力交换与学习网络。聊天室是能力交互的可视化与治理界面。
 
-## P0 当前实现
+## 当前方向
 
-- Agent Node 通过主动出站 WSS 连接 /api/v1/agent/connect，不要求 Agent 暴露入站端口。
-- 首帧 agent.hello 携带 agent_id、角色、resume_seq 和能力摘要；服务端回 agent.welcome。
-- 能力通过 Agent Registry 发布、查询，调用事件走统一 protocol。
-- SQLite WAL 事件存储、进程内 EventBus、WebSocket 实时控制面。
-- 文件始终保留在 Agent 本地，直连优先，Relay 兜底；中心只保存 FileRef/Transfer 元数据。
+- WebSocket 实时控制面
+- SQLite WAL + 进程内 EventBus（P0）
+- Agent Capability Registry
+- Agent 间能力调用、教学与 Skill Package 学习
+- 文件保留在 Agent 本地，直连优先，Relay 兜底
 
-### 握手示例
+## 开发状态
 
-{"type":"agent.hello","agent_id":"analyzer-01","role":"analyzer","resume_seq":42,"capabilities":["video.inspect"]}
-{"type":"agent.welcome","session_id":"sess-1","resume_from":42}
+P0 已完成核心骨架；P1 最小闭环已加入：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态及版本回滚元数据。
+
+## P1 API（元数据）
+
+- `POST /api/invocations`、`POST /api/invocations/{id}/progress`、`POST /api/invocations/{id}/result`：只记录调用状态与本地 `input_ref`/`output_ref`，事件写入 SQLite WAL。
+- `POST /api/teach-sessions`：建立教师 Agent 到学习者 Agent 的教学会话。
+- `POST /api/skills`：发布 Skill Package manifest；内容通过 `artifact_ref` 指向 Agent 本地文件，不上传中心。
+- `POST /api/evaluations`：记录 evaluator/check 状态与分数。
+- `POST /api/skills/{id}/rollback`：按版本回滚 manifest 元数据。

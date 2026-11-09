@@ -1,0 +1,14 @@
+package gateway
+
+import("encoding/json";"net/http";"strings";"github.com/jiejhong/GooseCab/internal/p1")
+
+type P1API struct{ Service *p1.Service }
+func(a *P1API) Handler(next http.Handler) http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){path:=strings.TrimSuffix(r.URL.Path,"/");if strings.HasPrefix(path,"/api/invocations"){a.invocations(w,r,path);return};if path=="/api/teach-sessions"{a.teach(w,r);return};if strings.HasPrefix(path,"/api/skills") {a.skills(w,r,path);return};if path=="/api/evaluations"{a.evaluations(w,r);return};next.ServeHTTP(w,r)})}
+func decode(w http.ResponseWriter,r *http.Request,v any)bool{if json.NewDecoder(r.Body).Decode(v)!=nil{http.Error(w,"invalid json",400);return false};return true}
+func out(w http.ResponseWriter,v any){w.Header().Set("Content-Type","application/json");json.NewEncoder(w).Encode(v)}
+func(a *P1API) invocations(w http.ResponseWriter,r *http.Request,path string){if r.Method==http.MethodPost&&path=="/api/invocations"{var v p1.Invocation;if !decode(w,r,&v){return};x,e:=a.Service.CreateInvocation(r.Context(),v);if e!=nil{http.Error(w,e.Error(),500);return};w.WriteHeader(201);out(w,x);return};parts:=strings.Split(strings.TrimPrefix(path,"/api/invocations/"),"/");if len(parts)>=2{if parts[1]=="progress"&&r.Method==http.MethodPost{var v p1.Progress;if !decode(w,r,&v){return};x,e:=a.Service.UpdateProgress(r.Context(),parts[0],v);if e!=nil{http.Error(w,e.Error(),404);return};out(w,x);return};if parts[1]=="result"&&r.Method==http.MethodPost{var v p1.Result;if !decode(w,r,&v){return};x,e:=a.Service.Complete(r.Context(),parts[0],v);if e!=nil{http.Error(w,e.Error(),404);return};out(w,x);return}};http.NotFound(w,r)}
+func(a *P1API) teach(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.NotFound(w,r);return};var v p1.TeachSession;if !decode(w,r,&v){return};x,e:=a.Service.StartTeach(r.Context(),v);if e!=nil{http.Error(w,e.Error(),500);return};w.WriteHeader(201);out(w,x)}
+func(a *P1API) skills(w http.ResponseWriter,r *http.Request,path string){
+ if r.Method==http.MethodPost && path=="/api/skills" {var v p1.SkillPackage;if !decode(w,r,&v){return};x,e:=a.Service.AddSkill(r.Context(),v);if e!=nil{http.Error(w,e.Error(),500);return};w.WriteHeader(201);out(w,x);return}
+ parts:=strings.Split(strings.TrimPrefix(path,"/api/skills/"),"/");if len(parts)==2&&parts[1]=="rollback"&&r.Method==http.MethodPost {var body struct{Version string `json:"version"`};if !decode(w,r,&body){return};x,e:=a.Service.Rollback(r.Context(),parts[0],body.Version);if e!=nil{http.Error(w,e.Error(),404);return};out(w,x);return};http.NotFound(w,r)}
+func(a *P1API) evaluations(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodPost{http.NotFound(w,r);return};var v p1.Evaluation;if !decode(w,r,&v){return};x,e:=a.Service.Evaluate(r.Context(),v);if e!=nil{http.Error(w,e.Error(),500);return};out(w,x)}

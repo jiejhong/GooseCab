@@ -8,7 +8,7 @@
 
 ## P1：能力学习与复用
 
-加入 Teach Session、Skill Package、Skill Compiler、本地 Sandbox、Evaluator、版本/回滚和 KnowledgeCard。能力包从 Agent 本地直连或经 Relay 加密分片传输。
+已加入最小闭环：Teach Session、Skill Package manifest、调用 request/progress/result 事件、Evaluator 状态、版本/回滚元数据。后续再接 Skill Compiler、本地 Sandbox 和 KnowledgeCard。能力包从 Agent 本地直连或经 Relay 加密分片传输。
 
 验收：B 教 A 一项能力，A 本地验证通过并在断开 B 后独立复用。
 
