@@ -1,0 +1,3 @@
+package protocol
+import("encoding/json";"testing")
+func TestAgentMessageSchemas(t *testing.T){cases:=[]string{`{"type":"agent.hello","agent_id":"a","capabilities":["cap.x"]}`,`{"type":"capability.announce","agent_id":"a","capability_id":"cap.x"}`,`{"type":"capability.invoke","request_id":"r1","capability_id":"cap.x"}`,`{"type":"capability.progress","request_id":"r1","percent":50}`,`{"type":"capability.result","request_id":"r1","status":"completed"}`,`{"type":"transfer.request","file_id":"f1","source_agent":"a","target_agent":"b","mode":"direct"}`};for _,raw:=range cases{var m map[string]any;if err:=json.Unmarshal([]byte(raw),&m);err!=nil||m["type"]==nil{t.Fatalf("invalid message: %s",raw)}}}

@@ -33,9 +33,9 @@ func (w *WS) Handler(h http.Handler) http.Handler { return http.HandlerFunc(func
         switch typ {
         case "agent.hello":
             b,_:=json.Marshal(msg); var hello protocol.AgentHello; _=json.Unmarshal(b,&hello); agentID=hello.AgentID
+            _=writeJSON(map[string]any{"type":"agent.welcome","resume_from":after,"room_id":room})
             publish("agent.hello","","",hello)
             for _,cap:=range hello.Capabilities { publish("capability.announce",cap,"",map[string]any{"agent_id":agentID,"capability_id":cap}) }
-            _=writeJSON(map[string]any{"type":"agent.welcome","resume_from":after,"room_id":room})
         case "capability.announce":
             var v protocol.CapabilityAnnounce; b,_:=json.Marshal(msg); if json.Unmarshal(b,&v)==nil { if v.AgentID==""{v.AgentID=agentID}; publish("capability.announce",v.CapabilityID,"",v) }
         case "capability.invoke":

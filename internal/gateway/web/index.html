@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>GooseCab Observer</title>
+<style>body{font:14px system-ui;margin:2rem;background:#10131a;color:#e8edf5}#events{white-space:pre-wrap;background:#181e29;padding:1rem;border-radius:8px;max-height:70vh;overflow:auto}.ok{color:#80d8a0}</style>
+<h1>GooseCab / 鸿梦阁</h1><p id="state">连接中…</p><div id="events"></div>
+<script>
+const room=new URLSearchParams(location.search).get('room_id')||'default', out=document.querySelector('#events'), state=document.querySelector('#state');
+const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?room_id='+encodeURIComponent(room));
+ws.onopen=()=>{state.textContent='已连接房间 '+room;state.className='ok';ws.send(JSON.stringify({type:'agent.hello',agent_id:'observer',name:'Web Observer'}))};
+ws.onmessage=e=>{const v=JSON.parse(e.data);out.textContent=JSON.stringify(v,null,2)+'\n\n'+out.textContent};ws.onerror=()=>state.textContent='连接失败';ws.onclose=()=>state.textContent='连接已关闭';
+</script>
