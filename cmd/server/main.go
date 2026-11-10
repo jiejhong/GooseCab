@@ -37,6 +37,14 @@ func main() {
 	}
 	defer s.Close()
 
+	h := newServerHandler(s, addr, path)
+	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)
+	log.Fatal(http.ListenAndServe(addr, h))
+}
+
+// newServerHandler assembles the production stack with authentication outside
+// every route, including status and both WebSocket endpoints.
+func newServerHandler(s *store.Store, addr, path string) http.Handler {
 	api := &gateway.API{Registry: registry.New()}
 	base := http.NewServeMux()
 	base.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -61,9 +69,8 @@ func main() {
 	mux = (&gateway.TransferAPI{Service: transfer.New(s, bus)}).Handler(mux)
 	mux = (&gateway.HistoryAPI{Store: s}).Handler(mux)
 	mux = gateway.Observer(mux)
-	h := (&gateway.WS{Store: s, Bus: bus}).Handler(mux)
-	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)
-	log.Fatal(http.ListenAndServe(addr, h))
+	h := (&gateway.WS{Store: s, Bus: bus, Registry: api.Registry}).Handler(mux)
+	return gateway.Authenticate(h)
 }
 
 func websocketEndpoint(addr string) string {

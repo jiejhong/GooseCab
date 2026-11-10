@@ -16,11 +16,13 @@ ws://gateway.example.com/api/v1/agent/connect?room_id=demo
 wss://gateway.example.com/ws?room_id=demo&resume_seq=0
 ```
 
-`resume_seq` 是房间内最后已经处理的事件序号。Gateway 会先回放 `seq > resume_seq` 的事件，再广播新事件。两条路径都支持可选的 `Authorization: Bearer <token>`；当 `GOOSECAB_AGENT_TOKEN` 非空时必须发送该 header。
+`resume_seq` 是房间内最后已经处理的事件序号。Gateway 会先回放 `seq > resume_seq` 的事件，再广播新事件。两条路径以及全部 `/api` HTTP 接口（包括 `/api/status`）都支持 `Authorization: Bearer <token>`；当 `GOOSECAB_AGENT_TOKEN` 非空时必须发送且只能发送一个该 header。`/` 观察页外壳和 `/healthz` 不要求 token。
+
+`room_id` 必须非空、最多 256 字节且只能出现一次；`resume_seq` 若提供，必须是非负整数且只能出现一次。`/ws` 仅用于读取：任何应用消息均返回 `read_only`，不会登记 Agent 或写事件。Agent 写入只能走 `/api/v1/agent/connect`。
 
 ## 建连握手
 
-客户端连上后发送：
+Agent 客户端连上后，必须先发送一次 hello，再发送其他写入消息：
 
 ```json
 {
@@ -42,11 +44,13 @@ Gateway 回复：
 }
 ```
 
-随后 Gateway 将 hello 和每个 capability 写入房间事件流。事件帧的基本结构是：
+Gateway 在 hello 成功写库、更新共享 Registry 后回复 welcome，并将 hello 和每个 capability 广播到房间。回放或本次 hello 事件可能先于 welcome 到达，客户端应保留它们。`agent_id` 必须非空且不超过 256 字节；同一连接的身份不能通过再次 hello 修改。
+
+事件帧的基本结构是：
 
 ```json
 {
-  "event_id": "capability.announce-2",
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
   "room_id": "demo",
   "seq": 2,
   "type": "capability.announce",
@@ -58,7 +62,7 @@ Gateway 回复：
 }
 ```
 
-`seq` 只在同一个 `room_id` 内递增。客户端应使用 `(room_id, seq)` 去重，并在重新连接时带上最近一次确认的序号。
+`event_id` 是不透明 ID；新自动事件使用全局唯一 UUID，已有 ID 不变。`seq` 由 SQLite 写事务在同一个 `room_id` 内原子分配，WebSocket、P1/P2 和传输生产者共用分配路径。客户端应使用 `(room_id, seq)` 去重，并在重新连接时带上最近一次确认的序号。
 
 SQLite 会保存完整事件信封，包括 `actor`、`task_id`、`capability_id`、`session_id`、`correlation_id` 和 `causation_id`，重连回放与实时事件保持相同字段。启动时会自动为旧数据库添加可空的 `event_json` 列，并保留原有行和列。升级前的事件仍可回放，但旧版本从未保存的顶层字段无法补回，保持为空；升级后的新事件会完整保存。数据库继续只保存事件与本地文件引用，不会读取或上传引用指向的文件内容。
 
@@ -74,6 +78,20 @@ Agent 可以直接发送以下 JSON 帧。Gateway 会把它们写入事件流并
 ```
 
 `input_ref`、`output_ref`、`artifact_ref` 是 Agent 本地引用。Gateway 只保存引用字符串，不读取引用指向的文件。
+
+### 通用事件与拒绝规则
+
+```json
+{"type":"event.publish","event":{"type":"chat.message","payload":{"text":"hello"}}}
+```
+
+Gateway 将事件的 room 和 actor 绑定到握手 room 与 hello 的 Agent ID；省略时补齐，显式填写但不一致时拒绝。客户端提供的 `seq` 会被服务器分配的值替换；可保留显式 `event_id` 和时间戳。重复显式 ID、数据库不可写等失败会返回 `persist_failed`，不会假装发布成功。`agent.hello`、`agent.welcome`、`capability.announce` 为保留事件，不能用 `event.publish` 绕过专用处理。
+
+拒绝帧格式为 `{"type":"error","code":"room_mismatch","message":"..."}`，不会写入事件历史。常用 code 包括 `read_only`、`hello_required`、`already_initialized`、`identity_mismatch`、`room_mismatch`、`reserved_event`、`persist_failed`；连接可继续使用并更正输入。非法 JSON 或超出 1 MiB 的消息会断开连接。
+
+hello 与 announce 更新 HTTP `/api/agents`、`/api/capabilities` 和 P2 `/api/capability-resolve` 共享的 Registry。announce 的 `agent_id` 必须省略或等于连接身份；同一能力按 ID 合并，保存 name/version/manifest。重连 hello 替换能力列表，仍存在的能力保留详细信息。Registry 不提供在线状态，断连不清除；重启后需重连或重新注册。
+
+这仍是共享 token、全网关目录，不提供初始 Agent ID 的独立认证或房间级权限。连接绑定防止在同一会话中伪造 envelope，但持有共享 token 者仍可在新连接声明其他 Agent ID。能力执行、结果归属授权和多租户隔离不在本次修复范围。
 
 ## 文件传输元数据
 
@@ -98,6 +116,8 @@ Agent 可以直接发送以下 JSON 帧。Gateway 会把它们写入事件流并
 可广播的传输状态类型为 `transfer.accepted`、`transfer.progress`、`transfer.completed` 和 `transfer.failed`。状态更新应携带同一个 `file_id` 或 `transfer_id`。
 
 ## HTTP 元数据接口示例
+
+以下 HTTP 示例在启用 token 时均需添加 `-H "Authorization: Bearer $GOOSECAB_AGENT_TOKEN"`，包含读、写、状态及发现接口。
 
 注册 Agent 时，Registry 的 `capabilities` 是对象数组：
 

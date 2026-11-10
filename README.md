@@ -80,7 +80,7 @@ go run ./cmd/agent -mode interactive \
 | --- | --- | --- |
 | `GOOSECAB_DB` | `goosecab.db` | SQLite 数据库路径。生产环境应使用持久化磁盘。 |
 | `GOOSECAB_ADDR` | `:8312` | HTTP、观察页和 Agent WebSocket 共用的监听地址；也可用 `cmd/server -addr`。 |
-| `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，`/api/v1/agent/connect`、`/ws` 和 `/api/events`（含 HTML 导出）要求 `Authorization: Bearer <token>`。 |
+| `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，所有 `/api` 接口（含状态、Registry、P1/P2、传输、历史及 HTML 导出）和 `/ws` 要求 `Authorization: Bearer <token>`。 |
 | `GOOSECAB_ALLOW_CROSS_ORIGIN` | `0` | 设为 `1` 才允许非同源浏览器 WebSocket；只应在反向代理已做来源限制时启用。 |
 
 `/` 页面会显示只读配置和状态；它与 HTTP API、观察 WebSocket、Agent WebSocket 共用同一个端口，不提供在线改配置。部署到公网时请在前面放置 TLS 终止和访问控制反向代理；不要把明文 WebSocket 直接暴露到公网。可复制 `examples/goosecab.env.example` 作为本地配置起点。
@@ -96,6 +96,15 @@ go run ./cmd/agent -url ws://127.0.0.1:8312/api/v1/agent/connect \
 ```
 
 观察页支持输入访问令牌，通过 HTTP Authorization header 读取脱敏记录和下载 HTML。令牌仅保留在当前页面内存中，不写入 URL 或浏览器存储。观察页每 5 秒读取新增持久化事件（仅可见标签页且当前分页已加载完毕时）；Agent 控制面仍使用 WebSocket。
+
+## Bug 修复后的兼容性
+
+- 未设置 token 时仍支持原来的本地开发调用；设置 token 后所有 API 请求都必须带 Bearer header，旧的无认证 HTTP 脚本需补充 header。`/` 观察页外壳与 `/healthz` 仍公开，服务详情需要认证。
+- `/ws` 是只读观察通道。发送事件必须改用 `/api/v1/agent/connect`，先发送非空 `agent_id` 的 `agent.hello`，连接的 `room_id` 必须非空。同一连接不能再次切换 Agent ID。
+- `event.publish` 未填 room/actor 时由服务器补齐；显式填写但与连接不一致时返回错误，不写库。`agent.hello`、`agent.welcome`、`capability.announce` 不能通过通用事件绕过专用处理。
+- 新自动事件 ID 是不透明 UUID，不再使用 `type-seq`。按房间原子分配 `seq`，保留旧 ID、已有记录和调用者显式 ID；客户端不要从 ID 推导类型或序号。
+- Registry 是全网关、进程内能力目录。hello 会登记 Agent，announce 合并能力，重连 hello 替换该 Agent 的能力集合（保留仍在集合内的能力详细信息）。断开不删除目录条目，重启后需重新注册；目录不代表在线状态。Agent ID 应在网关内唯一。
+- 共享 token 不是每个 Agent 的身份凭证或房间 ACL。持有 token 者仍可选择连接房间、首次声明 Agent ID，以及调用管理 API；不适合不互信的多租户部署。
 
 ## 跨机器部署
 
@@ -132,12 +141,12 @@ go run ./cmd/agent -mode interactive \
 
 ### P0
 
-- `POST /api/agents`、`GET /api/agents`：注册和查看 Agent Registry 元数据。
+- `POST /api/agents`、`GET /api/agents`：注册和查看 Agent Registry 元数据。Agent WebSocket 的 hello/announce 也会更新同一个 Registry。
 - `GET /api/capabilities?q=`：按 capability ID 或名称查询候选 Agent。
 - `GET /?room_id=<id>`：聊天式观察页，展示聊天、能力调用、进度、结果及可折叠的脱敏 JSON。
 - `GET /api/events?room_id=<id>`：按房间分页读取脱敏事件快照。
 - `GET /api/events/export.html?room_id=<id>`：下载漂亮的自包含 HTML 聊天记录，离线可读、可打印。
-- `/ws?room_id=<id>`：原始观察 WebSocket，供自定义客户端使用。
+- `/ws?room_id=<id>`：只读原始观察 WebSocket，供自定义客户端使用；所有写入帧都会被拒绝。
 - `/api/v1/agent/connect?room_id=<id>`：Agent 出站控制面 WebSocket。
 - `POST /api/transfers`、`POST /api/transfers/{file_id}`：记录文件传输请求和状态。文件字节不会经过 Gateway。
 

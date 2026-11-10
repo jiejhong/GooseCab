@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jiejhong/GooseCab/internal/protocol"
 	_ "modernc.org/sqlite"
 )
@@ -18,7 +19,12 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL`); err == nil {
+	// A single connection also keeps :memory: stores on the same database.
+	db.SetMaxOpenConns(1)
+	if _, err = db.Exec(`PRAGMA busy_timeout=5000`); err == nil {
+		_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	}
+	if err == nil {
 		err = migrate(db)
 	}
 	if err != nil {
@@ -85,7 +91,57 @@ func migrate(db *sql.DB) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// AppendNext atomically allocates a room sequence and persists the complete event.
+// BEGIN IMMEDIATE serializes writers even when they use different Store instances
+// pointing at the same database. The caller's event changes only after commit.
+func (s *Store) AppendNext(ctx context.Context, e *protocol.Event) error {
+	if e == nil {
+		return fmt.Errorf("append event: nil event")
+	}
+	next := *e
+	if next.EventID == "" {
+		next.EventID = uuid.NewString()
+	}
+	if next.TS.IsZero() {
+		next.TS = time.Now().UTC()
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// Configure the checked-out connection as SQLite pragmas are connection-local.
+	if _, err = conn.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), `ROLLBACK`)
+	if err = conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE room_id=?`, next.RoomID).Scan(&next.Seq); err != nil {
+		return err
+	}
+	if err = appendEvent(ctx, conn, next); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	*e = next
+	return nil
+}
+
+// Append preserves caller-supplied sequence numbers for imports. Live producers
+// must use AppendNext rather than combining NextSeq and Append.
 func (s *Store) Append(ctx context.Context, e protocol.Event) error {
+	return appendEvent(ctx, s.db, e)
+}
+
+type eventExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func appendEvent(ctx context.Context, db eventExecer, e protocol.Event) error {
 	snapshot, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("encode event %q: %w", e.EventID, err)
@@ -94,7 +150,7 @@ func (s *Store) Append(ctx context.Context, e protocol.Event) error {
 	if err != nil {
 		return fmt.Errorf("encode event %q payload: %w", e.EventID, err)
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO events(event_id,room_id,seq,type,payload,created_at,event_json) VALUES(?,?,?,?,?,?,?)`,
+	_, err = db.ExecContext(ctx, `INSERT INTO events(event_id,room_id,seq,type,payload,created_at,event_json) VALUES(?,?,?,?,?,?,?)`,
 		e.EventID, e.RoomID, e.Seq, e.Type, string(payload), e.TS.UTC().Format(time.RFC3339Nano), string(snapshot))
 	return err
 }
@@ -139,6 +195,8 @@ func (s *Store) EventsAfter(ctx context.Context, room string, after int64) ([]pr
 	return out, rows.Err()
 }
 
+// NextSeq returns a snapshot only; it does not reserve a sequence.
+// Use AppendNext to allocate and persist an event atomically.
 func (s *Store) NextSeq(ctx context.Context, room string) (int64, error) {
 	var n sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(seq) FROM events WHERE room_id=?`, room).Scan(&n)

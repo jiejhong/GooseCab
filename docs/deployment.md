@@ -10,7 +10,7 @@ install -d -m 0700 /var/lib/goosecab
 GOOSECAB_DB=/var/lib/goosecab/goosecab.db GOOSECAB_ADDR=:8312 ./bin/goosecab-server
 ```
 
-服务默认监听 `:8312`，可通过 `GOOSECAB_ADDR` 或 `./bin/goosecab-server -addr :8313` 覆盖。`/` 是只读配置/状态页，`/api/status` 返回监听地址、数据库路径和 token 是否启用；页面、HTTP API、观察 WebSocket 和 Agent WebSocket 共用该端口，不支持在线改配置。生产部署应由 systemd、容器编排器或其他进程管理器负责重启和日志收集；仓库没有内置 TLS、限流或多租户 ACL。
+服务默认监听 `:8312`，可通过 `GOOSECAB_ADDR` 或 `./bin/goosecab-server -addr :8313` 覆盖。`/` 是只读配置/状态页，`/api/status` 在启用 token 时需要 Bearer header，返回监听地址、数据库路径和 token 是否启用；页面、HTTP API、观察 WebSocket 和 Agent WebSocket 共用该端口，不支持在线改配置。生产部署应由 systemd、容器编排器或其他进程管理器负责重启和日志收集；仓库没有内置 TLS、限流或多租户 ACL。
 
 ## 反向代理
 
@@ -73,7 +73,8 @@ interactive 模式发送的帧仍是现有协议的 `event.publish`、`capabilit
 - Gateway 接收的 `input_ref`、`output_ref`、`artifact_ref`、路径引用和 SHA-256 都是元数据；文件内容不会经过 Gateway。
 - SQLite 数据库包含事件和这些引用，必须按其敏感等级保护磁盘和备份。
 - 启用 token 后，内置观察页支持内存中的令牌输入，通过 Authorization header 获取脱敏 HTTP 事件和 HTML 导出。不会把令牌放入 URL、本地存储或导出文档。
-- `/api/events` 与 `/api/events/export.html` 受共享 token 保护，但这不是 room 级 ACL：持有该 token 的用户可选择任意房间。未设置 token 时两接口公开，必须由反向代理控制访问。
+- 所有 `/api` 接口以及 `/ws` 受共享 token 保护，包含 Registry、P1/P2、传输、状态和历史读写。只有页面外壳和 `/healthz` 继续公开；token 未设置时保留开发模式，无认证。默认 `:8312` 监听所有接口，不是自动回环隔离；仅本机使用时显式配置 `GOOSECAB_ADDR=127.0.0.1:8312`。
+- `/ws` 只读；Agent 使用 `/api/v1/agent/connect`，必须先 hello，后续 room/actor 绑定到此连接。但 token 仍非 room 级 ACL，也不是独立的 Agent 身份凭证：持有者可选择任意房间和初始 Agent ID。
 - 历史列表与导出响应设置 `Cache-Control: no-store`；HTML 附件自带 CSP，不运行脚本或加载远程资源。原始 `/ws` 和数据库不做同样的脱敏。
 - 页面 5 秒轮询已持久化事件；刷新会重新读取快照。序号乱序补写的记录可能需要手动刷新完整历史才能看到。
 
@@ -109,3 +110,13 @@ GOOSECAB_DB=.data/gateway-b.db GOOSECAB_ADDR=:8313 ./bin/goosecab-server
 2. **flat / transparent**：本地 Agent 直接连接远程 Gateway，并使用与本地视图相同的 room ID。远程 Gateway 把它当普通 Agent，不需要 Gateway 间连接。
 
 本仓库只提供客户端和协议帧，不实现自动 Gateway 桥接或跨 room 重写；这样可避免把本地数据库、token 或文件字节意外暴露到上游。
+
+## 升级回归
+
+```bash
+go test ./...
+go test -race ./...
+node tests/observer.test.cjs
+```
+
+新增回归使用临时 SQLite 数据库和本机测试服务器，覆盖跨房间 ID、并行序号分配、跨 Store 混合生产者、重连回放、只读观察、room/actor 伪造、hello/announce 能力发现、全 API 鉴权，以及空房间首次消息出现后的持续轮询。旧数据库无需重建；升级前仍建议做常规备份。

@@ -53,11 +53,11 @@ function schedulePoll(){clearTimeout(pollTimer);if(!pollEnabled||hasMore)return;
 function validRoom(target){if(new TextEncoder().encode(target).length>256){notify('房间 ID 不能超过 256 个 UTF-8 字节（中文通常占 3 字节）。',true);return false;}return true;}
 async function load(reset=false,poll=false){
  if(!reset&&busy)return;
- if(reset){stopPolling();generation++;if(controller)controller.abort();if(exportController)exportController.abort();exporting=false;room=$('room').value.trim()||'default';$('room').value=room;token=$('token').value; snapshot=null;snapshotCursor='';nextSeq=0;nextID='';hasMore=false;count=0;pollEnabled=true;$('room-name').textContent=room;$('shown').textContent='0';$('total').textContent='—';placeholder('正在读取房间记录','获取已持久化的交互快照…');}
+ if(reset){stopPolling();generation++;if(controller)controller.abort();if(exportController)exportController.abort();exporting=false;room=$('room').value.trim()||'default';$('room').value=room;token=$('token').value; refreshStatus(); snapshot=null;snapshotCursor='';nextSeq=0;nextID='';hasMore=false;count=0;pollEnabled=true;$('room-name').textContent=room;$('shown').textContent='0';$('total').textContent='—';placeholder('正在读取房间记录','获取已持久化的交互快照…');}
  if(!validRoom(room)){stopPolling();busy=false;buttons();return;}
  const gen=generation;controller=new AbortController();const signal=controller.signal;busy=true;buttons();if(!poll)notify('正在加载记录…');
  try{
-  const query=new URLSearchParams({room_id:room,limit:'200'});if(snapshot!==null){if(!poll){query.set('through_seq',String(snapshot));query.set('through_cursor',snapshotCursor);}query.set('after_seq',String(nextSeq));query.set('after_cursor',nextID);}
+  const query=new URLSearchParams({room_id:room,limit:'200'});if(snapshot!==null){if(!poll){query.set('through_seq',String(snapshot));query.set('through_cursor',snapshotCursor);}query.set('after_seq',String(nextSeq));if(nextID!=='')query.set('after_cursor',nextID);}
   const response=await fetch('/api/events?'+query,{headers:authHeaders(),signal,cache:'no-store'});if(!response.ok)throw new Error(errorMessage(response.status));const data=await response.json();if(gen!==generation)return;
   if(data.redacted!==true||!Array.isArray(data.events))throw new Error('记录响应格式不正确，已停止展示。');
   if(data.events.some(e=>!e||e.room_id!==data.room_id))throw new Error('房间记录响应不一致，已停止展示。');
@@ -73,7 +73,7 @@ async function load(reset=false,poll=false){
 }
 $('room-form').addEventListener('submit',e=>{e.preventDefault();load(true);});
 // Cancel outstanding requests as soon as the user changes the room or credential.
-for(const id of ['room','token'])$(id).addEventListener('input',()=>{stopPolling();generation++;if(controller)controller.abort();if(exportController)exportController.abort();busy=false;exporting=false;hasMore=false;count=0;$('shown').textContent='0';$('total').textContent='—';$('room-name').textContent=$('room').value.trim()||'default';placeholder('设置已更改','点击刷新记录，或导出所选房间。');notify('点击刷新以应用当前房间和令牌。');buttons();});
+for(const id of ['room','token'])$(id).addEventListener('input',()=>{stopPolling();generation++;$('config').replaceChildren();if(controller)controller.abort();if(exportController)exportController.abort();busy=false;exporting=false;hasMore=false;count=0;$('shown').textContent='0';$('total').textContent='—';$('room-name').textContent=$('room').value.trim()||'default';placeholder('设置已更改','点击刷新记录，或导出所选房间。');notify('点击刷新以应用当前房间和令牌。');buttons();});
 $('more').addEventListener('click',()=>load());
 $('export').addEventListener('click',async()=>{
  if(exporting)return;const target=$('room').value.trim()||'default',credential=$('token').value,gen=generation;if(!validRoom(target))return;exportController=new AbortController();exporting=true;buttons();notify('正在生成完整房间的 HTML 聊天记录…');
@@ -81,7 +81,11 @@ $('export').addEventListener('click',async()=>{
  catch(error){if(gen!==generation||error.name==='AbortError')return;notify(error.message==='Failed to fetch'?'无法连接网关，导出失败。':error.message,true);}
  finally{if(gen===generation){exporting=false;buttons();}}
 });
-fetch('/api/status',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error();return r.json();}).then(v=>{const names={service:'服务',addr:'监听地址',token_required:'访问认证',agent_endpoint:'Agent 端点'};for(const key of Object.keys(names)){if(v[key]!==undefined)$('config').append(node('dt','',names[key]),node('dd','',key==='token_required'?(v[key]?'已启用':'未启用'):String(v[key])));}}).catch(()=>{$('config').append(node('dd','','服务状态暂不可用'));});
+async function refreshStatus(){
+ const gen=generation;const headers=authHeaders();$('config').replaceChildren();
+ try{const response=await fetch('/api/status',{headers,cache:'no-store'});if(!response.ok)throw new Error();const v=await response.json();if(gen!==generation)return;const names={service:'服务',addr:'监听地址',token_required:'访问认证',agent_endpoint:'Agent 端点'};for(const key of Object.keys(names)){if(v[key]!==undefined)$('config').append(node('dt','',names[key]),node('dd','',key==='token_required'?(v[key]?'已启用':'未启用'):String(v[key])));}}
+ catch(error){if(gen===generation)$('config').append(node('dd','','服务状态暂不可用，请检查访问令牌后刷新。'));}
+}
 load(true);
 </script>
 </body>

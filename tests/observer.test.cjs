@@ -29,6 +29,7 @@ const document = {
   body: new Node('body')
 };
 const requests = [];
+let emptyReads = 0;
 const context = {
   document, location: { search: '' }, URLSearchParams, URL, AbortController,
   Date, Set, Number, JSON, String, Boolean, console, TextEncoder,
@@ -39,6 +40,11 @@ const context = {
       return { ok: true, json: async () => ({ service: 'ok', database: '/secret/path' }) };
     }
     const query = new URL(url, 'http://test').searchParams;
+    if (query.get('room_id') === 'empty') {
+      if (query.has('after_cursor') && query.get('after_cursor') === '') return {ok:false,status:400};
+      const arrived = ++emptyReads > 2;
+      return {ok:true,json:async()=>({room_id:'empty',redacted:true,snapshot_seq:arrived?1:0,snapshot_cursor:arrived?'1':'0',total:arrived?1:0,has_more:false,next_seq:arrived?1:0,next_cursor:arrived?'1':'',events:arrived?[{room_id:'empty',seq:1,type:'chat.message',payload:{text:'first arrival'}}]:[]})};
+    }
     const seq = Number(query.get('after_seq') || 0) + 1;
     return {
       ok: true,
@@ -89,10 +95,21 @@ const all = node => [node, ...node.children.flatMap(all)];
   assert.equal(nodes.shown.textContent, '1');
   assert(requests.some(request => request.headers?.Authorization === 'Bearer secret'));
   assert(!requests.some(request => request.url.includes('secret')));
+  assert(requests.some(request => request.url === '/api/status' && request.headers?.Authorization === 'Bearer secret'));
+
+  nodes.room.value = 'empty';
+  await vm.runInContext('load(true)', context);
+  await vm.runInContext('load(false, true)', context);
+  assert(!new URL(requests.at(-1).url, 'http://test').searchParams.has('after_cursor'));
+  assert.equal(vm.runInContext('pollEnabled', context), true);
+  await vm.runInContext('load(false, true)', context);
+  assert.equal(nodes.shown.textContent, '1');
+  assert(all(nodes.events).some(node => node.textContent === 'first arrival'));
+  assert.equal(vm.runInContext('pollEnabled', context), true);
 
   nodes.room.value = '中'.repeat(86);
   await vm.runInContext('load(true)', context);
   assert(nodes.state.textContent.includes('256'));
   assert.equal(vm.runInContext('pollEnabled', context), false);
-  console.log('PASS: safe text, status whitelist, sanitized IDs, snapshot paging, polling, auth, room reset, UTF-8 limit');
+  console.log('PASS: safe text, status whitelist, sanitized IDs, snapshot paging, empty-room arrival, polling, authenticated status, room reset, UTF-8 limit');
 })().catch(error => { console.error(error); process.exitCode = 1; });
