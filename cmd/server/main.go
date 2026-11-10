@@ -68,7 +68,9 @@ func main() {
 func websocketEndpoint(addr string) string {
 	addr = strings.TrimRight(strings.TrimSpace(addr), "/")
 	if strings.HasPrefix(addr, ":") {
-		addr = "<host>" + addr
+		// Keep the status value a valid, directly usable URI while making it
+		// clear that the server may be bound on another interface.
+		addr = "127.0.0.1" + addr
 	}
 	return "ws://" + addr + "/api/v1/agent/connect"
 }
