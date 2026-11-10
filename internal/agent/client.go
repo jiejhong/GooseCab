@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jiejhong/GooseCab/internal/protocol"
 )
 
 const (
@@ -47,12 +50,16 @@ func DialWithToken(url, room, id string, caps []string, token string) (*Client, 
 }
 
 func dial(url, room, id string, caps []string, token string) (*Client, error) {
+	endpoint, err := urlpkg(url, room)
+	if err != nil {
+		return nil, err
+	}
 	var headers http.Header
 	if token != "" {
 		headers = make(http.Header)
 		headers.Set("Authorization", "Bearer "+token)
 	}
-	c, _, err := websocket.DefaultDialer.Dial(url+"?room_id="+room, headers)
+	c, _, err := websocket.DefaultDialer.Dial(endpoint, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +92,77 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 	return x, nil
 }
 
+// urlpkg adds room_id without discarding query parameters supplied by a
+// reverse proxy or deployment. It also escapes room IDs containing spaces or
+// other reserved characters.
+func urlpkg(raw, room string) (string, error) {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse gateway URL: %w", err)
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return "", fmt.Errorf("gateway URL must use ws or wss scheme")
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("gateway URL must include a host")
+	}
+	query := u.Query()
+	query.Set("room_id", room)
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
 func (c *Client) Write(v any) error { return c.Conn.WriteJSON(v) }
+
+// SendChat publishes a room chat message through the event stream. Chat text
+// is metadata only; the gateway does not execute or interpret it.
+func (c *Client) SendChat(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("chat text must not be empty")
+	}
+	return c.SendEvent("chat.message", map[string]any{
+		"text": text,
+	})
+}
+
+// SendEvent publishes a room event while keeping the event's room and actor
+// bound to this client connection.
+func (c *Client) SendEvent(eventType string, payload any) error {
+	if strings.TrimSpace(eventType) == "" {
+		return fmt.Errorf("event type must not be empty")
+	}
+	return c.Write(map[string]any{
+		"type": "event.publish",
+		"event": protocol.Event{
+			RoomID: c.RoomID,
+			Type:   eventType,
+			Actor:  protocol.Actor{Kind: "agent", ID: c.AgentID},
+			TS:     time.Now().UTC(),
+			Payload: payload,
+		},
+	})
+}
+
+// Invoke asks a target agent to execute a capability. Progress and result
+// frames are received through Read/ReadWithTimeout like every other event.
+func (c *Client) Invoke(requestID, capabilityID, targetAgentID string, payload any) error {
+	if strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("request ID must not be empty")
+	}
+	if strings.TrimSpace(capabilityID) == "" {
+		return fmt.Errorf("capability ID must not be empty")
+	}
+	msg := map[string]any{
+		"type":          "capability.invoke",
+		"request_id":    requestID,
+		"capability_id": capabilityID,
+		"payload":       payload,
+	}
+	if strings.TrimSpace(targetAgentID) != "" {
+		msg["target_agent_id"] = targetAgentID
+	}
+	return c.Write(msg)
+}
 
 // Read reads one event with a bounded default deadline. It never blocks
 // indefinitely when the expected event was not published.

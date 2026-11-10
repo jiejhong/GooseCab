@@ -108,6 +108,97 @@ func TestTwoAgentsAndLocalDataPlane(t *testing.T) {
 	}
 }
 
+func TestThreeAgentsInteractiveProtocolSmoke(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := (&gateway.WS{Store: s, Bus: eventbus.New()}).Handler(http.NotFoundHandler())
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	url := "ws" + srv.URL[4:] + "/api/v1/agent/connect"
+
+	weather, err := Dial(url, "smoke-3", "agent-weather", []string{"cap.weather"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer weather.Close()
+	code, err := Dial(url, "smoke-3", "agent-code", []string{"cap.code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer code.Close()
+	docs, err := Dial(url, "smoke-3", "agent-docs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer docs.Close()
+
+	if err = weather.SendChat("hello from weather"); err != nil {
+		t.Fatal(err)
+	}
+	if err = code.Write(map[string]any{
+		"type":          "capability.announce",
+		"agent_id":      "agent-code",
+		"capability_id": "cap.summarize",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = docs.Invoke("req-3", "cap.weather", "agent-weather", map[string]any{"city": "Taipei"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = weather.Write(map[string]any{
+		"type":       "capability.progress",
+		"request_id": "req-3",
+		"percent":    50,
+		"message":    "fetching forecast",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = weather.Write(map[string]any{
+		"type":       "capability.result",
+		"request_id": "req-3",
+		"status":     "completed",
+		"output_ref": "file:///agent-weather/forecast.json",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]int{
+		"chat.message":        1,
+		"capability.announce": 3,
+		"capability.invoke":   1,
+		"capability.progress": 1,
+		"capability.result":   1,
+	}
+	seen := make(map[string]int, len(want))
+	deadline := time.Now().Add(DefaultReadTimeout)
+	for !matchesCounts(seen, want) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("timed out waiting for 3-agent protocol events; got %v, want %v", seen, want)
+		}
+		msg, readErr := docs.ReadWithTimeout(remaining)
+		if readErr != nil {
+			t.Fatalf("read 3-agent protocol event: %v", readErr)
+		}
+		typ, _ := msg["type"].(string)
+		if _, ok := want[typ]; ok {
+			seen[typ]++
+		}
+	}
+}
+
+func matchesCounts(got, want map[string]int) bool {
+	for typ, count := range want {
+		if got[typ] < count {
+			return false
+		}
+	}
+	return true
+}
+
 func TestDialWithToken(t *testing.T) {
 	t.Setenv("GOOSECAB_AGENT_TOKEN", "test-token")
 	s, err := store.Open(filepath.Join(t.TempDir(), "db.sqlite"))

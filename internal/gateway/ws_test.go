@@ -2,3 +2,20 @@ package gateway
 
 import("net/http";"net/http/httptest";"testing";"time";"github.com/gorilla/websocket";"github.com/jiejhong/GooseCab/internal/eventbus";"github.com/jiejhong/GooseCab/internal/store")
 func TestAgentProtocolSmoke(t *testing.T){s,e:=store.Open(t.TempDir()+"/smoke.db");if e!=nil{t.Fatal(e)};defer s.Close();h:=(&WS{Store:s,Bus:eventbus.New()}).Handler(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){http.NotFound(w,r)}));srv:=httptest.NewServer(h);defer srv.Close();u:="ws"+srv.URL[4:]+"/api/v1/agent/connect?room_id=smoke";c,_,e:=websocket.DefaultDialer.Dial(u,nil);if e!=nil{t.Fatal(e)};defer c.Close();_ = c.WriteJSON(map[string]any{"type":"agent.hello","agent_id":"a","capabilities":[]string{"cap.x"}});c.SetReadDeadline(time.Now().Add(2*time.Second));seen:=map[string]bool{};for i:=0;i<2;i++{var m map[string]any;if e:=c.ReadJSON(&m);e!=nil{t.Fatal(e)};if typ,ok:=m["type"].(string);ok{seen[typ]=true}};if !seen["agent.welcome"]{t.Fatal("missing agent.welcome")};for _,m:=range []map[string]any{{"type":"capability.announce","agent_id":"a","capability_id":"cap.x"},{"type":"capability.invoke","request_id":"r1","capability_id":"cap.x"},{"type":"capability.result","request_id":"r1","status":"completed"},{"type":"transfer.request","file_id":"f1","source_agent":"a","target_agent":"b","mode":"direct"}}{if e:=c.WriteJSON(m);e!=nil{t.Fatal(e)}};for i:=0;i<8;i++{var m map[string]any;if e:=c.ReadJSON(&m);e!=nil{t.Fatal(e)};if typ,ok:=m["type"].(string);ok{seen[typ]=true};if seen["capability.announce"]&&seen["capability.invoke"]&&seen["capability.result"]&&seen["transfer.request"]{break}};for _,typ:=range []string{"capability.announce","capability.invoke","capability.result","transfer.request"}{if !seen[typ]{t.Fatalf("missing %s",typ)}}}
+
+func TestCheckOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8312/ws", nil)
+	req.Host = "127.0.0.1:8312"
+	req.Header.Set("Origin", "http://127.0.0.1:8312")
+	if !upgrader.CheckOrigin(req) {
+		t.Fatal("same-origin browser websocket was rejected")
+	}
+	req.Header.Set("Origin", "https://evil.example")
+	if upgrader.CheckOrigin(req) {
+		t.Fatal("cross-origin websocket was accepted without opt-in")
+	}
+	t.Setenv("GOOSECAB_ALLOW_CROSS_ORIGIN", "1")
+	if !upgrader.CheckOrigin(req) {
+		t.Fatal("cross-origin websocket was rejected after opt-in")
+	}
+}

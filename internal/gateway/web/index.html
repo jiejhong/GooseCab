@@ -1,8 +1,11 @@
-<!doctype html><meta charset="utf-8"><title>GooseCab Observer</title>
-<style>body{font:14px system-ui;margin:2rem;background:#10131a;color:#e8edf5}#events{white-space:pre-wrap;background:#181e29;padding:1rem;border-radius:8px;max-height:70vh;overflow:auto}.ok{color:#80d8a0}</style>
-<h1>GooseCab / 鸿梦阁</h1><p id="state">连接中…</p><div id="events"></div>
+<!doctype html><meta charset="utf-8"><title>GooseCab Gateway</title>
+<style>body{font:14px system-ui;margin:2rem;background:#10131a;color:#e8edf5;max-width:1000px}#events{white-space:pre-wrap;background:#181e29;padding:1rem;border-radius:8px;max-height:60vh;overflow:auto}.ok{color:#80d8a0}.card{background:#181e29;border-radius:8px;padding:1rem;margin:1rem 0}dt{color:#9eb4d4;float:left;clear:left;width:9rem}dd{margin-left:10rem;word-break:break-all}</style>
+<h1>GooseCab / 鸿梦阁</h1>
+<div class="card"><h2>Gateway 状态与配置</h2><dl id="config"><dt>加载中</dt><dd>...</dd></dl><p>配置来自启动参数或环境变量；此页面只读，不会在线修改服务。</p></div>
+<p id="state">连接中…</p><div id="events"></div>
 <script>
 const room=new URLSearchParams(location.search).get('room_id')||'default', out=document.querySelector('#events'), state=document.querySelector('#state');
+fetch('/api/status').then(r=>r.json()).then(v=>{const c=document.querySelector('#config');c.innerHTML=Object.entries(v).map(([k,val])=>'<dt>'+k+'</dt><dd>'+String(val)+'</dd>').join('')}).catch(()=>{});
 const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?room_id='+encodeURIComponent(room));
 ws.onopen=()=>{state.textContent='已连接房间 '+room;state.className='ok';ws.send(JSON.stringify({type:'agent.hello',agent_id:'observer',name:'Web Observer'}))};
 ws.onmessage=e=>{const v=JSON.parse(e.data);out.textContent=JSON.stringify(v,null,2)+'\n\n'+out.textContent};ws.onerror=()=>state.textContent='连接失败';ws.onclose=()=>state.textContent='连接已关闭';

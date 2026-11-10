@@ -100,7 +100,7 @@ Agent 可以直接发送以下 JSON 帧。Gateway 会把它们写入事件流并
 注册 Agent 时，Registry 的 `capabilities` 是对象数组：
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/agents \
+curl -X POST http://127.0.0.1:8312/api/agents \
   -H 'Content-Type: application/json' \
   -d '{"id":"agent-a","name":"Echo Agent","capabilities":[{"id":"cap.echo","name":"Echo","version":"1"}]}'
 ```
@@ -108,14 +108,14 @@ curl -X POST http://127.0.0.1:8080/api/agents \
 P1 调用生命周期示例：
 
 ```bash
-curl -X POST http://127.0.0.1:8080/api/invocations \
+curl -X POST http://127.0.0.1:8312/api/invocations \
   -H 'Content-Type: application/json' \
   -d '{"id":"req-1","room_id":"demo","capability_id":"cap.echo","caller_agent_id":"agent-b","target_agent_id":"agent-a","input_ref":"file:///agent-b/in.json"}'
 
-curl -X POST http://127.0.0.1:8080/api/invocations/req-1/progress \
+curl -X POST http://127.0.0.1:8312/api/invocations/req-1/progress \
   -H 'Content-Type: application/json' -d '{"percent":50,"message":"working"}'
 
-curl -X POST http://127.0.0.1:8080/api/invocations/req-1/result \
+curl -X POST http://127.0.0.1:8312/api/invocations/req-1/result \
   -H 'Content-Type: application/json' -d '{"status":"completed","output_ref":"file:///agent-a/out.json"}'
 ```
 

@@ -3,8 +3,10 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +23,14 @@ type WS struct {
 }
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	return origin == "" || origin == r.Header.Get("Host") || os.Getenv("GOOSECAB_ALLOW_CROSS_ORIGIN") == "1"
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" && strings.EqualFold(parsed.Host, r.Host) {
+		return true
+	}
+	return os.Getenv("GOOSECAB_ALLOW_CROSS_ORIGIN") == "1"
 }}
 
 func (w *WS) Handler(h http.Handler) http.Handler {
