@@ -46,11 +46,11 @@ func main() {
 	base.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"service":         "goosecab-gateway",
-			"addr":            addr,
-			"database":        path,
-			"token_required":  os.Getenv("GOOSECAB_AGENT_TOKEN") != "",
-			"agent_endpoint":  websocketEndpoint(addr),
+			"service":        "goosecab-gateway",
+			"addr":           addr,
+			"database":       path,
+			"token_required": os.Getenv("GOOSECAB_AGENT_TOKEN") != "",
+			"agent_endpoint": websocketEndpoint(addr),
 		})
 	})
 	base.Handle("/api/", api.Handler())
@@ -59,6 +59,7 @@ func main() {
 	mux = (&gateway.P2API{Service: p2.New(s, api.Registry)}).Handler(mux)
 	bus := eventbus.New()
 	mux = (&gateway.TransferAPI{Service: transfer.New(s, bus)}).Handler(mux)
+	mux = (&gateway.HistoryAPI{Store: s}).Handler(mux)
 	mux = gateway.Observer(mux)
 	h := (&gateway.WS{Store: s, Bus: bus}).Handler(mux)
 	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)

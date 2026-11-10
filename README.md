@@ -20,7 +20,7 @@ mkdir -p .data
 GOOSECAB_DB="$PWD/.data/goosecab.db" go run ./cmd/server
 ```
 
-Gateway 默认监听 `:8312`（可用 `-addr` 或 `GOOSECAB_ADDR` 覆盖），健康检查和只读配置/观察页分别是：
+Gateway 默认监听 `:8312`（可用 `-addr` 或 `GOOSECAB_ADDR` 覆盖），健康检查和只读聊天观察页分别是：
 
 ```bash
 curl -fsS http://127.0.0.1:8312/healthz
@@ -80,7 +80,7 @@ go run ./cmd/agent -mode interactive \
 | --- | --- | --- |
 | `GOOSECAB_DB` | `goosecab.db` | SQLite 数据库路径。生产环境应使用持久化磁盘。 |
 | `GOOSECAB_ADDR` | `:8312` | HTTP、观察页和 Agent WebSocket 共用的监听地址；也可用 `cmd/server -addr`。 |
-| `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，`/api/v1/agent/connect` 和 `/ws` 要求 `Authorization: Bearer <token>`。 |
+| `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，`/api/v1/agent/connect`、`/ws` 和 `/api/events`（含 HTML 导出）要求 `Authorization: Bearer <token>`。 |
 | `GOOSECAB_ALLOW_CROSS_ORIGIN` | `0` | 设为 `1` 才允许非同源浏览器 WebSocket；只应在反向代理已做来源限制时启用。 |
 
 `/` 页面会显示只读配置和状态；它与 HTTP API、观察 WebSocket、Agent WebSocket 共用同一个端口，不提供在线改配置。部署到公网时请在前面放置 TLS 终止和访问控制反向代理；不要把明文 WebSocket 直接暴露到公网。可复制 `examples/goosecab.env.example` 作为本地配置起点。
@@ -95,7 +95,7 @@ go run ./cmd/agent -url ws://127.0.0.1:8312/api/v1/agent/connect \
   -room demo -id agent-a -token "replace-with-a-long-random-value"
 ```
 
-观察页目前不能自定义 Authorization header，因此启用 token 时请使用 CLI 或自定义 WebSocket 客户端观察事件。
+观察页支持输入访问令牌，通过 HTTP Authorization header 读取脱敏记录和下载 HTML。令牌仅保留在当前页面内存中，不写入 URL 或浏览器存储。观察页每 5 秒读取新增持久化事件（仅可见标签页且当前分页已加载完毕时）；Agent 控制面仍使用 WebSocket。
 
 ## 跨机器部署
 
@@ -134,7 +134,10 @@ go run ./cmd/agent -mode interactive \
 
 - `POST /api/agents`、`GET /api/agents`：注册和查看 Agent Registry 元数据。
 - `GET /api/capabilities?q=`：按 capability ID 或名称查询候选 Agent。
-- `GET /?room_id=<id>`：观察页；底层 WebSocket 路径为 `/ws?room_id=<id>`。
+- `GET /?room_id=<id>`：聊天式观察页，展示聊天、能力调用、进度、结果及可折叠的脱敏 JSON。
+- `GET /api/events?room_id=<id>`：按房间分页读取脱敏事件快照。
+- `GET /api/events/export.html?room_id=<id>`：下载漂亮的自包含 HTML 聊天记录，离线可读、可打印。
+- `/ws?room_id=<id>`：原始观察 WebSocket，供自定义客户端使用。
 - `/api/v1/agent/connect?room_id=<id>`：Agent 出站控制面 WebSocket。
 - `POST /api/transfers`、`POST /api/transfers/{file_id}`：记录文件传输请求和状态。文件字节不会经过 Gateway。
 
@@ -153,12 +156,25 @@ go run ./cmd/agent -mode interactive \
 
 P1/P2 当前 API 主要记录元数据和事件，不会自动调度真实的 Agent 进程。请求体字段和事件帧示例见协议文档。
 
+## 查看和导出交互记录
+
+浏览器打开 `http://127.0.0.1:8312/?room_id=demo`，选择房间并点击 **导出 HTML**。下载不依赖已经加载的网页分页，而是读取导出时该房间的完整数据库快照。文档按房间序号排列，带参与者、UTC 时间、调用关联 ID、消息气泡和事件卡片；原始字段以脱敏 JSON 折叠展示。
+
+```bash
+# 启用 token 时添加 -H "Authorization: Bearer $GOOSECAB_AGENT_TOKEN"
+curl -fS 'http://127.0.0.1:8312/api/events?room_id=demo&limit=200'
+curl -fS 'http://127.0.0.1:8312/api/events/export.html?room_id=demo' -o goosecab-chat.html
+```
+
+HTML 是脱敏阅读副本，不是原始备份：凭据字段、文件引用和可识别本地路径会被遮盖；不会读入 Agent 的文件字节，也不包含网关配置或访问令牌。自动脱敏不是完整的秘密检测器，分享前仍需复核自由文本。导出最多 10,000 条，超限返回 413，绝不会偷偷截断；可用 `after_seq` / `through_seq` 分段导出。完整分页、快照和认证边界见 [协议文档](docs/protocol.md#交互记录列表与-html-导出)。
+
 ## 开发检查
 
 ```bash
 gofmt -w ./cmd ./internal
 go vet ./...
 go test ./...
+node tests/observer.test.cjs # 可选本地 UI 行为检查（Node.js 18+）
 ```
 
-CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...` 和 `go test ./...`。
+CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...` 、`go test ./...` 和无依赖的 Node UI 行为检查。

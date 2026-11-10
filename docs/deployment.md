@@ -72,7 +72,10 @@ interactive 模式发送的帧仍是现有协议的 `event.publish`、`capabilit
 - token 不应放在 URL、日志或提交到仓库。`cmd/agent -token` 只在握手 header 中发送。
 - Gateway 接收的 `input_ref`、`output_ref`、`artifact_ref`、路径引用和 SHA-256 都是元数据；文件内容不会经过 Gateway。
 - SQLite 数据库包含事件和这些引用，必须按其敏感等级保护磁盘和备份。
-- 启用 token 后，内置观察页无法设置 Authorization header。使用 CLI、自定义 WebSocket 客户端或在代理层为观察者提供单独的受控入口。
+- 启用 token 后，内置观察页支持内存中的令牌输入，通过 Authorization header 获取脱敏 HTTP 事件和 HTML 导出。不会把令牌放入 URL、本地存储或导出文档。
+- `/api/events` 与 `/api/events/export.html` 受共享 token 保护，但这不是 room 级 ACL：持有该 token 的用户可选择任意房间。未设置 token 时两接口公开，必须由反向代理控制访问。
+- 历史列表与导出响应设置 `Cache-Control: no-store`；HTML 附件自带 CSP，不运行脚本或加载远程资源。原始 `/ws` 和数据库不做同样的脱敏。
+- 页面 5 秒轮询已持久化事件；刷新会重新读取快照。序号乱序补写的记录可能需要手动刷新完整历史才能看到。
 
 ## 验证顺序
 

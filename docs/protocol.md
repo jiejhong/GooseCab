@@ -122,3 +122,34 @@ curl -X POST http://127.0.0.1:8312/api/invocations/req-1/result \
 ```
 
 P2 的 plan/task/blackboard/private-session 接口当前记录编排元数据，不会启动调度器或 Provider 进程。
+
+
+## 交互记录列表与 HTML 导出
+
+### JSON 列表
+
+`GET /api/events?room_id=demo&limit=200`。必须明确指定非空 `room_id`（最多 256 字节）；没有跨房间聚合模式。只接受 GET。`limit` 默认 200，最大 1000。
+
+响应包含 `room_id`、`events`、`total`、`snapshot_seq`、`snapshot_cursor`、`has_more`、`next_seq`、`next_cursor` 和 `redacted: true`。`total` 是这个房间在快照边界内的总记录数，不是当前页大小。事件保留完整信封结构与精确 JSON 数值，敏感字段内容被替换。
+
+当 `has_more` 为 true，下一页携带上一页的 `next_seq` 和 `next_cursor`，并固定首个响应的两个快照边界：
+
+```text
+/api/events?room_id=demo&limit=200&after_seq=<next_seq>&after_cursor=<next_cursor>&through_seq=<snapshot_seq>&through_cursor=<snapshot_cursor>
+```
+
+序号仅在房间内使用；同一序号的记录由不透明行游标区分，不会因分页漏掉。`snapshot_cursor` 限制底层已存在的行，即使并发写入复用了较早序号，也不会混入已固定的快照。首次边界、计数与事件页在同一 SQLite 读取事务中获取。调用者应将游标当作不透明值，不把它当事件 ID。仅指定 `after_seq` 时，它是严格大于的下界，不回传该序号的记录。
+
+### HTML 下载
+
+`GET /api/events/export.html?room_id=demo` 以附件返回完整、独立的 HTML 文档。它读取数据库中的事件，不是导出浏览器当前已加载的几条。支持可选 `after_seq`（不含）和 `through_seq`（包含），所有被选中的记录均按序号及写入行顺序导出。标题、摘要和页脚明确说明房间、范围、条数、UTC 导出时间和脱敏边界。
+
+文档区分聊天、能力调用、进度、结果和其他事件；每条可展开完整的脱敏事件信封。无 JavaScript、远程字体、图片或其他外部资源。Go `html/template` 对所有事件内容自动转义，离线 CSP 限制主动内容。可用浏览器打印另存为 PDF。
+
+单次最多 10,000 条事件。超限返回 HTTP 413，没有部分 HTML；请缩小序号范围再导出。空房间返回带空状态的有效文档。读取/渲染失败返回 500，不冒充成功导出。旧数据库未保存的 actor/task/session 等字段无法恢复，旧记录照实显示缺失。
+
+### 认证和数据边界
+
+两接口在设置 `GOOSECAB_AGENT_TOKEN` 时要求 `Authorization: Bearer <token>`。拒绝 URL token 参数，并返回 `Cache-Control: no-store`。共享 token 不是分房间授权；不同租户仍需反向代理或后续 ACL。未设置 token 时必须自行限制网络访问。网页通过 HTTP 分页和每 5 秒轮询展示持久化事件，不会用原始 WebSocket 数据绕过脱敏。
+
+这是用于阅读和分享的脱敏副本：凭据字段（token/secret/password/API key/Authorization/cookie 等）、文件路径与 `*_ref` 引用、可识别的本地路径和当前网关 token 被隐藏；常见带引号凭据赋值也被过滤。存储的原始事件不会被改写，导出不会解引用路径、读取或打包文件字节。自由文本中未识别的秘密仍可能存在，分享前必须人工复核。该功能不提供原始数据备份或任意文件下载。
