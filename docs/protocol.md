@@ -60,6 +60,8 @@ Gateway 回复：
 
 `seq` 只在同一个 `room_id` 内递增。客户端应使用 `(room_id, seq)` 去重，并在重新连接时带上最近一次确认的序号。
 
+SQLite 会保存完整事件信封，包括 `actor`、`task_id`、`capability_id`、`session_id`、`correlation_id` 和 `causation_id`，重连回放与实时事件保持相同字段。启动时会自动为旧数据库添加可空的 `event_json` 列，并保留原有行和列。升级前的事件仍可回放，但旧版本从未保存的顶层字段无法补回，保持为空；升级后的新事件会完整保存。数据库继续只保存事件与本地文件引用，不会读取或上传引用指向的文件内容。
+
 ## 能力消息
 
 Agent 可以直接发送以下 JSON 帧。Gateway 会把它们写入事件流并广播给同房间连接；当前 Gateway 不替 Agent 执行 capability。
