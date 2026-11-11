@@ -132,7 +132,7 @@ func TestHelloAnnounceDiscoveryAndReconnect(t *testing.T) {
 	c := securityDial(t, srv, "/api/v1/agent/connect", "one")
 	writeFrame(t, c, map[string]any{"type": "agent.hello", "agent_id": "a", "name": "Alpha", "role": "worker", "capabilities": []string{"cap.echo", "cap.stale"}})
 	securityRead(t, c, "agent.welcome")
-	writeFrame(t, c, map[string]any{"type": "capability.announce", "capability_id": "cap.echo", "name": "Echo", "version": "2", "manifest": map[string]any{"schema": "v2"}})
+	writeFrame(t, c, map[string]any{"type": "capability.announce", "capability_id": "cap.echo", "name": "Echo", "version": "2", "description": "Echo public text"})
 	for {
 		msg := securityRead(t, c, "capability.announce")
 		p := msg["payload"].(map[string]any)

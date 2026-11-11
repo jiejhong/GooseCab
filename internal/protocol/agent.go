@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 type AgentHello struct {
 	AgentID      string   `json:"agent_id"`
 	Name         string   `json:"name"`
@@ -19,11 +21,18 @@ type AgentMessage struct {
 	Payload      any    `json:"payload,omitempty"`
 }
 type CapabilityAnnounce struct {
-	AgentID      string `json:"agent_id"`
-	CapabilityID string `json:"capability_id"`
-	Name         string `json:"name,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Manifest     any    `json:"manifest,omitempty"`
+	Kind         string               `json:"kind,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Callable     bool                 `json:"callable"`
+	InputSchema  json.RawMessage      `json:"input_schema,omitempty"`
+	Skill        *SkillDescriptor     `json:"skill,omitempty"`
+	MCP          *MCPDescriptor       `json:"mcp,omitempty"`
+	Knowledge    *KnowledgeDescriptor `json:"knowledge,omitempty"`
+	AgentID      string               `json:"agent_id"`
+	CapabilityID string               `json:"capability_id"`
+	Name         string               `json:"name,omitempty"`
+	Version      string               `json:"version,omitempty"`
+	Manifest     any                  `json:"manifest,omitempty"`
 }
 type CapabilityInvoke struct {
 	Route         []string `json:"route,omitempty"`

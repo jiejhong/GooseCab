@@ -26,6 +26,15 @@ func (w *WS) publishCapability(ctx context.Context, room, actor, typ, capID, id 
 	if len(events) >= store.MaxInvocationEvents {
 		return fmt.Errorf("invocation history reached safety limit")
 	}
+	if v, ok := payload.(protocol.CapabilityInvoke); ok && protocol.IsExecutableCapability(v.CapabilityID) && len(events) == 0 && w.Registry != nil {
+		if a, found := w.Registry.Get(v.TargetAgentID); found {
+			for _, c := range a.Capabilities {
+				if c.ID == v.CapabilityID && c.Kind != "" && !c.Callable {
+					return fmt.Errorf("advertised capability is not callable")
+				}
+			}
+		}
+	}
 	if err = validateExecution(events, actor, typ, payload); err != nil {
 		return err
 	}
@@ -43,7 +52,7 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 	switch v := payload.(type) {
 	case protocol.CapabilityInvoke:
 		id = v.RequestID
-		strict = protocol.IsExecutableTextCapability(v.CapabilityID)
+		strict = protocol.IsExecutableCapability(v.CapabilityID) || strings.HasPrefix(v.CapabilityID, "cap.skill.") || strings.HasPrefix(v.CapabilityID, "cap.mcp.") || strings.HasPrefix(v.CapabilityID, "cap.knowledge.")
 	case protocol.CapabilityProgress:
 		id = v.RequestID
 	case protocol.CapabilityResult:
@@ -70,7 +79,7 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 			if original == nil {
 				original = &v
 				caller = event.Actor.ID
-				strict = strict || protocol.IsExecutableTextCapability(v.CapabilityID)
+				strict = strict || protocol.IsExecutableCapability(v.CapabilityID)
 			}
 		case "capability.progress":
 			if original != nil && event.Actor.ID == original.TargetAgentID {
@@ -98,6 +107,9 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 	}
 	switch v := payload.(type) {
 	case protocol.CapabilityInvoke:
+		if !protocol.IsExecutableCapability(v.CapabilityID) {
+			return fmt.Errorf("invalid executable capability identifier")
+		}
 		if strings.TrimSpace(v.TargetAgentID) == "" || len(v.TargetAgentID) > 256 {
 			return fmt.Errorf("executable calls require an explicit target_agent_id")
 		}
@@ -108,9 +120,8 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 				return fmt.Errorf("request ID conflict; keep the original caller, target, capability and payload")
 			}
 		}
-		raw, _ := json.Marshal(v.Payload)
-		if len(raw) > 32768 {
-			return fmt.Errorf("text request payload too large")
+		if err := protocol.ValidateCapabilityPayload(v.CapabilityID, v.Payload); err != nil {
+			return err
 		}
 	case protocol.CapabilityProgress:
 		if original == nil || original.TargetAgentID != actor {

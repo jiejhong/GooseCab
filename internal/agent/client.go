@@ -22,7 +22,9 @@ const (
 	// wait for a sequence of events should use their own overall deadline and
 	// pass the remaining duration to ReadWithTimeout.
 	DefaultReadTimeout = 5 * time.Second
-	dialReadTimeout    = 2 * time.Second
+	// Room replay precedes welcome. Allow bounded large-history recovery under
+	// load; DialWithTokenContext still honors a caller's shorter deadline.
+	dialReadTimeout = 10 * time.Second
 )
 
 // Client is a minimal outbound Agent Node connection. It never exposes an

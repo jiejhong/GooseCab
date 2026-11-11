@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jiejhong/GooseCab/internal/agent"
 	"github.com/jiejhong/GooseCab/internal/protocol"
@@ -63,7 +62,7 @@ func (c Config) validate() error {
 	seen := map[string]bool{}
 	for _, r := range c.Routes {
 		// Safe text workers only; no arbitrary shell or file-capability forwarding.
-		if r.Worker == "" || len(c.Identity(r.Worker)) > 256 || r.Worker == c.ID || !protocol.IsExecutableTextCapability(r.Capability) {
+		if r.Worker == "" || len(c.Identity(r.Worker)) > 256 || r.Worker == c.ID || !protocol.IsExecutableCapability(r.Capability) {
 			return fmt.Errorf("invalid explicit text route")
 		}
 		k := c.Identity(r.Worker) + "\x00" + r.Capability
@@ -285,12 +284,8 @@ func (b *Bridge) Run(ctx context.Context) (runErr error) {
 						reason = "Cascade loop rejected"
 					}
 				}
-				raw, _ := json.Marshal(v.Payload)
-				var input map[string]any
-				_ = json.Unmarshal(raw, &input)
-				text, ok := input["text"].(string)
-				if !ok || len(input) != 1 || len(text) > agent.MaxTextBytes || !utf8.ValidString(text) {
-					reason = "Bridge accepts only bounded text payloads, never files"
+				if err := protocol.ValidateCapabilityPayload(v.CapabilityID, v.Payload); err != nil {
+					reason = "Bridge accepts only bounded capability inputs, never package or file transfers"
 				}
 				if reason != "" {
 					if err = result(up[f.proxy], v.RequestID, "failed", reason); err != nil {
@@ -343,6 +338,26 @@ func (b *Bridge) Run(ctx context.Context) (runErr error) {
 				waiting[downstreamID] = pending{f.proxy, e.CorrelationID, time.Now().Add(c.Timeout)}
 			} else {
 				typ, _ := f.msg["type"].(string)
+				if typ == "capability.announce" {
+					var event protocol.Event
+					var announcement protocol.CapabilityAnnounce
+					if decode(f.msg, &event) != nil || decode(event.Payload, &announcement) != nil || event.RoomID != c.Downstream.Room || event.Actor.Kind != "agent" || protocol.NormalizeAnnouncement(&announcement) != nil {
+						continue
+					}
+					for _, route := range c.Routes {
+						if route.Worker != event.Actor.ID || route.Capability != announcement.CapabilityID {
+							continue
+						}
+						announcement.AgentID = c.Identity(route.Worker)
+						if err = up[announcement.AgentID].Write(struct {
+							Type string `json:"type"`
+							protocol.CapabilityAnnounce
+						}{"capability.announce", announcement}); err != nil {
+							return err
+						}
+					}
+					continue
+				}
 				if (typ != "capability.progress" && typ != "capability.result") || f.msg["room_id"] != c.Downstream.Room {
 					continue
 				}

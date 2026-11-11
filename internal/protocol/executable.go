@@ -9,7 +9,10 @@ func IsExecutableTextCapability(id string) bool {
 	if id == "cap.text.uppercase" {
 		return true
 	}
-	const prefix = "cap.learned.text."
+	prefix := "cap.learned.text."
+	if strings.HasPrefix(id, "cap.skill.") {
+		prefix = "cap.skill."
+	}
 	if !strings.HasPrefix(id, prefix) || len(id) <= len(prefix) || len(id) > 128 {
 		return false
 	}

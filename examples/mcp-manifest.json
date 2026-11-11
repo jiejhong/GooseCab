@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "name": "approved_text_service",
+  "endpoint": "https://mcp.example.com/mcp",
+  "tools": [
+    {
+      "capability": "cap.mcp.summarize",
+      "name": "summarize",
+      "input_schema": {"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}
+    }
+  ]
+}

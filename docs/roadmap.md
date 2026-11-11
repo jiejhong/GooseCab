@@ -36,3 +36,8 @@
 - `cmd/transfer`：仅出站 WebSocket、有界背压流式传输，接收端完整性验证和安全落盘；Gateway 不保存文件内容。
 
 `python3 tests/collaboration-smoke.py` 验收以上功能组合，包含多个真实 OS 进程与 TCP 连接。独立物理主机、WAN/TLS、生产身份/房间权限、通用任务/模型能力、自动重试/分配仍需另外验收，不把单机组合测试等同这些目标完成。
+
+
+## 新增 Skill / MCP / 知识核心
+
+一等类型目录、真实 Skill 文件包和本机审批、显式批准的 HTTP MCP 调用，以及默认私有的知识/经验记录与选择性传递已实现。目录描述不等于安装授权；接收包不等于激活；调用远端能力不等于学习安装。完整文件经 Relay，网关不持久化包文件或知识正文。受限 Skill recipe 可执行，通用脚本 Skill 仍为手工说明包；MCP 限 JSON HTTP 子集；知识学习为持久记录导入，不是模型训练。`tests/providers-smoke.py` 单机多进程验收包括两 Gateway 的三类能力代理调用。

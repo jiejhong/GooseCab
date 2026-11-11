@@ -20,7 +20,7 @@ import (
 const MaxPackageBytes = 65536
 const MaxTextBytes = 4096
 
-var capabilityPattern = regexp.MustCompile(`^cap\.learned\.text\.[a-z][a-z0-9_]{0,47}$`)
+var capabilityPattern = regexp.MustCompile(`^cap\.(learned\.text|skill)\.[a-z][a-z0-9_]{0,47}$`)
 
 func ValidCapability(id string) bool { return capabilityPattern.MatchString(id) }
 
@@ -274,4 +274,18 @@ func Inspect(r io.Reader) (Package, string, error) {
 		return p, "", e
 	}
 	return p, Digest(b), nil
+}
+
+// ExecutePackage validates a bounded recipe and runs it without installation.
+// Callers must enforce local approval before using this pure adapter.
+func ExecutePackage(r io.Reader, text string) (string, error) {
+	b, e := io.ReadAll(io.LimitReader(r, MaxPackageBytes+1))
+	if e != nil {
+		return "", e
+	}
+	p, e := decode(b)
+	if e != nil {
+		return "", e
+	}
+	return run(p, text)
 }

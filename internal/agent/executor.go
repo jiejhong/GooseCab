@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -26,9 +27,12 @@ const MaxTextBytes = 4096
 // restarting an agent. A claimed call without a saved result is uncertain and
 // must never be automatically executed again, even though this demo is pure.
 type Executor struct {
-	db     *sql.DB
-	skills *skills.Store
-	mu     sync.Mutex
+	db             *sql.DB
+	skills         *skills.Store
+	providers      map[string]CapabilityProvider
+	providerList   []CapabilityProvider
+	providerOwners map[string]int
+	mu             sync.Mutex
 }
 
 func OpenExecutor(path string) (*Executor, error) {
@@ -130,7 +134,8 @@ func (e *Executor) Handle(ctx context.Context, room, agentID string, event map[s
 	if err = sendProgress(send, invoke.RequestID, "running", 0, "Executing bounded text capability"); err != nil {
 		return true, err
 	}
-	result := e.execute(invoke)
+	result := e.execute(protocol.WithInvocationActor(ctx, room, envelope.Actor.ID), invoke)
+	result = validateProviderResult(invoke.RequestID, result)
 	saved, err := json.Marshal(result)
 	if err != nil {
 		return true, err
@@ -195,6 +200,18 @@ func (e *InvocationError) Error() string { return e.Message }
 // of spinning on a poisoned websocket read deadline. Restart with the same
 // journal to replay cached results; it never automatically resubmits a task.
 func RunExecutor(ctx context.Context, c *Client, e *Executor, onEvent func(map[string]any) error) error {
+	announcements, err := e.Announcements()
+	if err != nil {
+		return err
+	}
+	for _, a := range announcements {
+		if err := c.Write(struct {
+			Type string `json:"type"`
+			protocol.CapabilityAnnounce
+		}{"capability.announce", a}); err != nil {
+			return err
+		}
+	}
 	// A restart need not re-publish results that are already durably available.
 	// Fold the entire pre-welcome snapshot first, rather than reacting to its
 	// earliest invocation while overlooking a later result for that same call.
@@ -285,17 +302,37 @@ func terminalReplayIDs(replay []map[string]any, room, agentID string) map[string
 func (e *Executor) UseSkills(s *skills.Store) { e.skills = s }
 func (e *Executor) Capabilities() ([]string, error) {
 	ids := []string{TextCapability}
-	if e.skills == nil {
-		return ids, nil
+	if e.skills != nil {
+		learned, err := e.skills.Capabilities()
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range learned {
+			if strings.HasPrefix(id, "cap.skill.") {
+				return nil, fmt.Errorf("cap.skill capabilities require the reviewed Skill bundle provider, not the legacy recipe store")
+			}
+		}
+		ids = append(ids, learned...)
 	}
-	learned, err := e.skills.Capabilities()
-	return append(ids, learned...), err
+	for id := range e.providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for i := 1; i < len(ids); i++ {
+		if ids[i] == ids[i-1] {
+			return nil, fmt.Errorf("duplicate enabled capability %q", ids[i])
+		}
+	}
+	return ids, nil
 }
 func (e *Executor) supports(id string) bool {
 	if id == TextCapability {
 		return true
 	}
-	if e.skills == nil || !skills.ValidCapability(id) {
+	if e.providers[id] != nil {
+		return true
+	}
+	if e.skills == nil || !strings.HasPrefix(id, "cap.learned.text.") || !skills.ValidCapability(id) {
 		return false
 	}
 	ids, err := e.skills.Capabilities()
@@ -311,9 +348,12 @@ func (e *Executor) supports(id string) bool {
 }
 func isExecutableCapability(v any) bool {
 	id, _ := v.(string)
-	return id == TextCapability || skills.ValidCapability(id)
+	return protocol.IsExecutableCapability(id)
 }
-func (e *Executor) execute(invoke protocol.CapabilityInvoke) protocol.CapabilityResult {
+func (e *Executor) execute(ctx context.Context, invoke protocol.CapabilityInvoke) protocol.CapabilityResult {
+	if p := e.providers[invoke.CapabilityID]; p != nil {
+		return p.Invoke(ctx, invoke)
+	}
 	if invoke.CapabilityID == TextCapability {
 		return executeText(invoke)
 	}

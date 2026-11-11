@@ -20,14 +20,22 @@ func (c *Client) InvokeText(ctx context.Context, requestID, target, text string,
 // InvokeTextCapability uses the same guarded lifecycle for a locally installed
 // declarative text skill. The caller cannot use it to execute arbitrary tools.
 func (c *Client) InvokeTextCapability(ctx context.Context, requestID, capabilityID, target, text string, onProgress func(protocol.CapabilityProgress)) (protocol.CapabilityResult, error) {
-	var result protocol.CapabilityResult
-	if strings.TrimSpace(target) == "" || strings.TrimSpace(requestID) == "" || len(requestID) > 128 {
-		return result, fmt.Errorf("text calls require a target and request ID of at most 128 bytes")
-	}
 	if !protocol.IsExecutableTextCapability(capabilityID) || !utf8.ValidString(text) || len(text) > MaxTextBytes {
-		return result, fmt.Errorf("a bounded text capability and at most 4096 UTF-8 input bytes are required")
+		return protocol.CapabilityResult{}, fmt.Errorf("bounded text capability and input required")
 	}
-	wanted := protocol.CapabilityInvoke{RequestID: requestID, CapabilityID: capabilityID, TargetAgentID: target, Payload: map[string]any{"text": text}}
+	return c.InvokeCapability(ctx, requestID, capabilityID, target, map[string]any{"text": text}, onProgress)
+}
+
+// InvokeCapability submits a bounded JSON-object call without granting provider permissions.
+func (c *Client) InvokeCapability(ctx context.Context, requestID, capabilityID, target string, payload any, onProgress func(protocol.CapabilityProgress)) (protocol.CapabilityResult, error) {
+	var result protocol.CapabilityResult
+	if strings.TrimSpace(target) == "" || strings.TrimSpace(requestID) == "" || len(requestID) > 128 || !protocol.IsExecutableCapability(capabilityID) {
+		return result, fmt.Errorf("executable capability, target and request ID required")
+	}
+	if err := protocol.ValidateCapabilityPayload(capabilityID, payload); err != nil {
+		return result, err
+	}
+	wanted := protocol.CapabilityInvoke{RequestID: requestID, CapabilityID: capabilityID, TargetAgentID: target, Payload: payload}
 	// Dial buffered the complete pre-welcome replay. Fold it before acting:
 	// an old unknown may have been reconciled by a later durable result. A
 	// completed cached call can be retrieved even with the worker offline.

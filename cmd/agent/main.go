@@ -23,6 +23,9 @@ import (
 	"time"
 
 	"github.com/jiejhong/GooseCab/internal/agent"
+	"github.com/jiejhong/GooseCab/internal/knowledge"
+	"github.com/jiejhong/GooseCab/internal/mcpclient"
+	"github.com/jiejhong/GooseCab/internal/skillbundle"
 	"github.com/jiejhong/GooseCab/internal/skills"
 )
 
@@ -33,14 +36,17 @@ const (
 )
 
 type options struct {
-	url          string
-	room         string
-	id           string
-	capabilities string
-	token        string
-	mode         string
-	state        string
-	skills       string
+	url            string
+	room           string
+	id             string
+	capabilities   string
+	token          string
+	mode           string
+	state          string
+	skills         string
+	skillBundles   string
+	mcpStore       string
+	knowledgeStore string
 }
 
 func main() {
@@ -53,6 +59,9 @@ func main() {
 	flag.StringVar(&opts.mode, "mode", modeReadOnly, "client mode: read-only, interactive or worker")
 	flag.StringVar(&opts.state, "state", "", "persistent execution journal (required for worker mode; reuse on every restart)")
 	flag.StringVar(&opts.skills, "skills", "", "optional agent-local evaluated skill store (worker mode only)")
+	flag.StringVar(&opts.skillBundles, "skill-bundles", "", "local reviewed Skill bundle store (worker mode; no implicit approval)")
+	flag.StringVar(&opts.mcpStore, "mcp-store", "", "local approved MCP manifest store (worker mode; credentials stay local)")
+	flag.StringVar(&opts.knowledgeStore, "knowledge-store", "", "local knowledge store owned by -id (worker mode; only explicit shares exposed)")
 	flag.Parse()
 
 	if strings.TrimSpace(opts.id) == "" {
@@ -67,8 +76,8 @@ func main() {
 	}
 
 	var executor *agent.Executor
-	if opts.skills != "" && mode != modeWorker {
-		log.Fatal("-skills requires explicit -mode worker")
+	if (opts.skills != "" || opts.skillBundles != "" || opts.mcpStore != "" || opts.knowledgeStore != "") && mode != modeWorker {
+		log.Fatal("capability stores require explicit -mode worker")
 	}
 	caps := splitCSV(opts.capabilities)
 	if mode == modeWorker {
@@ -87,6 +96,40 @@ func main() {
 			}
 			defer localSkills.Close()
 			executor.UseSkills(localSkills)
+		}
+		if opts.skillBundles != "" {
+			store, openErr := skillbundle.Open(opts.skillBundles)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			if err = executor.UseProvider(store); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if opts.mcpStore != "" {
+			store, openErr := mcpclient.Open(opts.mcpStore)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			provider, providerErr := store.Provider()
+			if providerErr != nil {
+				log.Fatal(providerErr)
+			}
+			if err = executor.UseProvider(provider); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if opts.knowledgeStore != "" {
+			store, openErr := knowledge.Open(opts.knowledgeStore, opts.id)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			if err = executor.UseProvider(store); err != nil {
+				log.Fatal(err)
+			}
 		}
 		caps, err = executor.Capabilities()
 		if err != nil {

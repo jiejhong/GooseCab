@@ -200,3 +200,10 @@ Gateway 保证同 ID 的新能力调用只能保持原调用者、目标和输�
 - `cmd/plan` 的任务分配/状态日志存放在协调 Agent 本机，真实 capability 生命周期仍经 Gateway 保存；P2 HTTP 元数据 API 不会自动执行计划。见 [任务编排](task-orchestration.md)。
 - `cmd/skill` 的 package、评估与激活在 Learner 本机；P1 HTTP API 不安装 package。见 [能力学习](capability-learning.md)。
 - `cmd/cascade` 只转发明确路由的文本能力生命周期；flat 使用独立命名空间代理身份，不伪造原 Agent，也不泛化复制聊天或文件事件。见 [级联](cascade.md)。
+
+
+## 类型化 Skill / MCP / 知识能力
+
+`capability.announce` 支持 `kind`、`description`、`callable`、受限 `input_schema` 及 `skill` / `mcp` / `knowledge` 描述。新命名空间的裸 hello ID 默认不可调用，必须收到验证过的类型描述才显示可调用；该状态也不是 Agent 本机的执行授权。任意旧 `manifest` 字典不再接受，需要迁移为类型化公开元数据。
+
+`cap.skill.*` 采用文本参数；`cap.mcp.*` 和 `cap.knowledge.*` 支持最多16KiB 的 JSON 对象，返回最多4096字节的 text/plain。完整知识记录、Skill 文件和 MCP 连接清单使用独立 Relay，不作为生命周期事件负载。新命名空间沿用调用者/目标绑定、ID 冲突、最终结果不可改写及 unknown 不重试规则。见 [能力目录](capability-catalog.md)。

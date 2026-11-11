@@ -12,6 +12,20 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 
 组合验收 `python3 tests/collaboration-smoke.py` 会启动两个独立 Gateway 进程、多个 worker/bridge/CLI 进程，验证能力传递、老师退出后复用、跨网关 DAG 与 32 MiB 文件完整性，并检查网关内存增长及超限拒绝。该自动化使用单机 TCP 回环，不冒充已完成两台物理机器的网络、TLS 和防火墙验收。
 
+## 一等能力：文本、Skill、MCP 与知识
+
+能力目录新增 `kind`、`callable` 和可审查的类型化描述。`GET /api/capabilities?kind=skill`（或 `mcp`、`knowledge`）可筛选。仅声明 ID 不代表已安装、被授权或可调用。
+
+- **Skill**：真实 `manifest.json` + `SKILL.md` + 文件 ZIP 包，可通过 Relay 传递。接收仅暂存，核对 SHA256 并本机批准后才激活；普通说明/素材包保持不可执行，显式 text-recipe adapter 才能在受限运行时执行。见 [Skill 包](docs/skill-bundles.md)。
+- **MCP**：传递的是无凭据的服务器/工具清单，接收后仍禁用。必须本机批准精确清单、调用方与可选房间，并在本机绑定凭据，才进行真实 HTTP MCP 调用。不会自动启动 stdio 进程、安装依赖或执行不受信代码。见 [MCP 能力](docs/mcp-capabilities.md)。
+- **知识、记忆、经验**：本机持久记录，默认私有；只把明确选择的记录分享给命名接收方。完整记录通过 Relay 文件传输，审阅后按摘要导入，保留来源和版本，导入不会自动再分享。远程搜索只返回有限标题/引用元数据，不返回正文。不是模型权重训练。见 [知识共享](docs/knowledge-sharing.md)。
+
+调用远端已有能力，不会把包、连接权限或知识自动装到调用方。`cmd/call` 提供显式 JSON 调用；worker 的 `-skill-bundles`、`-mcp-store`、`-knowledge-store` 只加载各自本机已批准状态。原 `-skills` / `cap.learned.text.*` 兼容保留，`cap.skill.*` 使用完整 Skill bundle provider。详见 [能力目录与调用](docs/capability-catalog.md)。
+
+现有 DAG 仍是受限文本输入/依赖汇总，可调用文本型 Skill；MCP 与知识的结构化调用通过 `cmd/call`，也可按明确路由跨 Gateway。级联下游授权的是 bridge 自己的调用身份，不自动继承上游调用者的权限。
+
+`python3 tests/providers-smoke.py` 验证 Skill/MCP/知识文件传递、审批、真实调用、私有信息边界、去重恢复及双网关代理。MCP 当前支持 Streamable HTTP 的 JSON 响应子集，不支持 SSE、stdio、资源/图片输出或完整 OAuth 流程。短小调用参数与文本结果会进入房间历史，不能用它传文件正文或秘密。
+
 ## 快速开始
 
 要求 Go 1.23 或更新版本。
@@ -192,6 +206,7 @@ go test ./...
 go test -race ./...
 node tests/observer.test.cjs # UI 行为检查（Node.js 18+）
 python3 tests/collaboration-smoke.py # 真实独立进程与 TCP 网络组合验收（Python 3）
+python3 tests/providers-smoke.py # Skill/MCP/知识的真实端到端与安全边界
 ```
 
 CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 、无依赖的 Node UI 行为检查和 Python 独立进程网络组合验收。

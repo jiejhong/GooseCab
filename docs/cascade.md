@@ -2,7 +2,7 @@
 
 `cmd/cascade` is a real outbound WebSocket bridge agent, not an event replication
 stub. It connects to two running GooseCab gateways and forwards explicitly
-addressed bounded text invocations and the matching worker progress/results.
+addressed bounded capability invocations and the matching worker progress/results.
 Files remain agent-local; this bridge neither reads files nor forwards file
 payloads. File streaming uses the separate data plane, not this bridge.
 
@@ -70,8 +70,7 @@ loop/hop rejection, offline unknown, room/type isolation and payload limits.
 - Only the two configured rooms, explicitly addressed routes, and
   `capability.invoke/progress/result` cross the boundary. Chat, arbitrary events,
   file transfers, unaddressed calls and unrelated workers' results do not.
-- Only configured `cap.text.uppercase` or `cap.learned.text.*` capabilities accepting a single UTF-8 `text`
-  string of at most 4096 bytes are supported. The configured worker must
+- Configured text/Skill recipes accept a single UTF-8 `text` string of at most 4096 bytes. MCP/knowledge routes accept bounded JSON objects (16 KiB maximum) and all results remain bounded text. The configured worker must
   implement the capability. No implicit fallback to another worker exists.
 - Each bridge ID must be unique across the topology. A repeated ID or the
   configured hop limit (1–8) rejects a call. Gateway JSON fingerprints include
@@ -101,3 +100,9 @@ loop/hop rejection, offline unknown, room/type isolation and payload limits.
   but does not upgrade the underlying gateway authentication model.
 - The two gateways may be remote; automated acceptance uses distinct local
   listeners/processes, not a claim of an already-tested public-WAN deployment.
+
+## Typed provider routes
+
+Explicit `cap.skill.*`, `cap.mcp.*` and `cap.knowledge.*` routes may cross the bridge. Only validated typed capability announcements from the configured downstream worker are mirrored to the proxy identity; package files, endpoint credentials and full knowledge records never accompany announcements. Wait for the rich `callable: true` catalog entry before invoking a new provider.
+
+Downstream MCP and knowledge authorization sees the bridge's actual `<bridge-id>/bridge` caller identity. It does **not** trust or inherit a purported original caller from payload/provenance. A local operator must independently approve that bridge identity and trust its upstream room/routes; do not treat this as cryptographic end-user delegation. Without that separate approval, the provider rejects the call. File/package transmission remains a separate Relay operation.

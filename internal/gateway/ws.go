@@ -171,7 +171,7 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				}
 				valid := true
 				for _, cap := range hello.Capabilities {
-					if strings.TrimSpace(cap) == "" {
+					if candidate := (protocol.CapabilityAnnounce{CapabilityID: cap}); protocol.NormalizeAnnouncement(&candidate) != nil {
 						valid = false
 					}
 				}
@@ -188,7 +188,9 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					return
 				}
 				for _, cap := range hello.Capabilities {
-					publish("capability.announce", cap, "", protocol.CapabilityAnnounce{AgentID: agentID, CapabilityID: cap})
+					announcement := protocol.CapabilityAnnounce{AgentID: agentID, CapabilityID: cap}
+					_ = protocol.NormalizeAnnouncement(&announcement)
+					publish("capability.announce", cap, "", announcement)
 				}
 			case "capability.announce":
 				var v protocol.CapabilityAnnounce
@@ -201,8 +203,12 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					continue
 				}
 				v.AgentID = agentID
+				if err := protocol.ValidateAnnouncementJSON(raw, &v); err != nil {
+					reject("invalid_announce", err.Error())
+					continue
+				}
 				persistWith(protocol.Event{Type: typ, CapabilityID: v.CapabilityID, Payload: v}, func() {
-					w.Registry.Announce(agentID, registry.Capability{ID: v.CapabilityID, Name: v.Name, Version: v.Version, Manifest: v.Manifest})
+					w.Registry.Announce(agentID, registry.CapabilityFromAnnouncement(v))
 				})
 			case "capability.invoke":
 				var v protocol.CapabilityInvoke

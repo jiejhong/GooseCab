@@ -1,0 +1,8 @@
+{
+ "format": 1,
+ "name": "greeting",
+ "version": 1,
+ "description": "Trim and lowercase short greetings, then append an exclamation mark",
+ "adapter": {"kind":"text-recipe","recipe":"recipe.json"},
+ "files": [{"path":"SKILL.md"},{"path":"recipe.json"}]
+}

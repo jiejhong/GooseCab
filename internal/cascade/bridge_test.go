@@ -252,8 +252,19 @@ func TestRoomAndEventIsolation(t *testing.T) {
 	caller.SendChat("not replicated")
 	caller.SendEvent("transfer.request", map[string]any{"file": "not replicated"})
 	caller.Invoke("file-denied", agent.TextCapability, "edge/worker", map[string]any{"text": "x", "file_ref": "private"})
-	if r := waitResult(t, caller, "file-denied"); r.Status != "failed" {
-		t.Fatal(r)
+	// Strict namespace validation now rejects malformed text at the upstream
+	// Gateway, before it can be persisted or reach the bridge at all.
+	for {
+		frame, readErr := caller.ReadWithTimeout(3 * time.Second)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if frame["type"] == "error" && frame["request_id"] == "file-denied" {
+			if frame["code"] != "invalid_execution" {
+				t.Fatal(frame)
+			}
+			break
+		}
 	}
 	stop()
 	<-done
