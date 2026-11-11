@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jiejhong/GooseCab/internal/agent"
+	"github.com/jiejhong/GooseCab/internal/skills"
 )
 
 const (
@@ -39,6 +40,7 @@ type options struct {
 	token        string
 	mode         string
 	state        string
+	skills       string
 }
 
 func main() {
@@ -50,6 +52,7 @@ func main() {
 	flag.StringVar(&opts.token, "token", "", "Gateway bearer token (optional; defaults to GOOSECAB_AGENT_TOKEN)")
 	flag.StringVar(&opts.mode, "mode", modeReadOnly, "client mode: read-only, interactive or worker")
 	flag.StringVar(&opts.state, "state", "", "persistent execution journal (required for worker mode; reuse on every restart)")
+	flag.StringVar(&opts.skills, "skills", "", "optional agent-local evaluated skill store (worker mode only)")
 	flag.Parse()
 
 	if strings.TrimSpace(opts.id) == "" {
@@ -64,17 +67,31 @@ func main() {
 	}
 
 	var executor *agent.Executor
+	if opts.skills != "" && mode != modeWorker {
+		log.Fatal("-skills requires explicit -mode worker")
+	}
 	caps := splitCSV(opts.capabilities)
 	if mode == modeWorker {
 		if len(caps) > 0 {
-			log.Fatal("worker mode announces only cap.text.uppercase; omit -capabilities")
+			log.Fatal("worker mode announces only enabled local capabilities; omit -capabilities")
 		}
 		executor, err = agent.OpenExecutor(opts.state)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer executor.Close()
-		caps = []string{agent.TextCapability}
+		if opts.skills != "" {
+			localSkills, openErr := skills.Open(opts.skills)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer localSkills.Close()
+			executor.UseSkills(localSkills)
+		}
+		caps, err = executor.Capabilities()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	c, err := agent.DialWithToken(opts.url, opts.room, opts.id, caps, opts.token)
 	if err != nil {

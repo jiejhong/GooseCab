@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jiejhong/GooseCab/internal/protocol"
+	"github.com/jiejhong/GooseCab/internal/skills"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,8 +26,9 @@ const MaxTextBytes = 4096
 // restarting an agent. A claimed call without a saved result is uncertain and
 // must never be automatically executed again, even though this demo is pure.
 type Executor struct {
-	db *sql.DB
-	mu sync.Mutex
+	db     *sql.DB
+	skills *skills.Store
+	mu     sync.Mutex
 }
 
 func OpenExecutor(path string) (*Executor, error) {
@@ -77,7 +79,7 @@ func (e *Executor) Handle(ctx context.Context, room, agentID string, event map[s
 	if err = json.Unmarshal(body, &invoke); err != nil {
 		return false, err
 	}
-	if invoke.TargetAgentID != agentID || invoke.CapabilityID != TextCapability {
+	if invoke.TargetAgentID != agentID || !e.supports(invoke.CapabilityID) {
 		return false, nil
 	}
 	if strings.TrimSpace(invoke.RequestID) == "" || len(invoke.RequestID) > 128 || envelope.CorrelationID != invoke.RequestID || envelope.Actor.Kind != "agent" || envelope.Actor.ID == "" {
@@ -128,7 +130,7 @@ func (e *Executor) Handle(ctx context.Context, room, agentID string, event map[s
 	if err = sendProgress(send, invoke.RequestID, "running", 0, "Executing bounded text capability"); err != nil {
 		return true, err
 	}
-	result := executeText(invoke)
+	result := e.execute(invoke)
 	saved, err := json.Marshal(result)
 	if err != nil {
 		return true, err
@@ -266,7 +268,7 @@ func terminalReplayIDs(replay []map[string]any, room, agentID string) map[string
 			continue
 		}
 		payload, _ := msg["payload"].(map[string]any)
-		if msg["type"] == "capability.invoke" && payload["capability_id"] == TextCapability && payload["target_agent_id"] == agentID && payload["request_id"] == id {
+		if msg["type"] == "capability.invoke" && isExecutableCapability(payload["capability_id"]) && payload["target_agent_id"] == agentID && payload["request_id"] == id {
 			known[id] = true
 		}
 		actor, _ := msg["actor"].(map[string]any)
@@ -277,4 +279,66 @@ func terminalReplayIDs(replay []map[string]any, room, agentID string) map[string
 		}
 	}
 	return terminal
+}
+
+// UseSkills attaches a local store before RunExecutor starts. The caller owns it.
+func (e *Executor) UseSkills(s *skills.Store) { e.skills = s }
+func (e *Executor) Capabilities() ([]string, error) {
+	ids := []string{TextCapability}
+	if e.skills == nil {
+		return ids, nil
+	}
+	learned, err := e.skills.Capabilities()
+	return append(ids, learned...), err
+}
+func (e *Executor) supports(id string) bool {
+	if id == TextCapability {
+		return true
+	}
+	if e.skills == nil || !skills.ValidCapability(id) {
+		return false
+	}
+	ids, err := e.skills.Capabilities()
+	if err != nil {
+		return false
+	}
+	for _, known := range ids {
+		if id == known {
+			return true
+		}
+	}
+	return false
+}
+func isExecutableCapability(v any) bool {
+	id, _ := v.(string)
+	return id == TextCapability || skills.ValidCapability(id)
+}
+func (e *Executor) execute(invoke protocol.CapabilityInvoke) protocol.CapabilityResult {
+	if invoke.CapabilityID == TextCapability {
+		return executeText(invoke)
+	}
+	r := protocol.CapabilityResult{RequestID: invoke.RequestID, Status: "failed"}
+	b, err := json.Marshal(invoke.Payload)
+	if err != nil {
+		r.Error = "Invalid text payload"
+		return r
+	}
+	var input struct {
+		Text *string `json:"text"`
+	}
+	d := json.NewDecoder(strings.NewReader(string(b)))
+	d.DisallowUnknownFields()
+	if err = d.Decode(&input); err != nil || input.Text == nil {
+		r.Error = "Expected only a text string"
+		return r
+	}
+	output, err := e.skills.Execute(invoke.CapabilityID, *input.Text)
+	if err != nil {
+		r.Error = err.Error()
+		return r
+	}
+	r.Status = "completed"
+	r.ResultAvailable = true
+	r.Output = &protocol.TextOutput{Text: output, MediaType: "text/plain"}
+	return r
 }

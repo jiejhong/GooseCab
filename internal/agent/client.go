@@ -41,17 +41,23 @@ type Client struct {
 // gateway may replay room events before processing the new hello, so those
 // frames are retained for the first Read call instead of being discarded.
 func Dial(url, room, id string, caps []string) (*Client, error) {
-	return dial(url, room, id, caps, "")
+	return dial(context.Background(), url, room, id, caps, "")
 }
 
 // DialWithToken is the authenticated variant of Dial. The token is sent only
 // as a Bearer Authorization header during the websocket handshake; it is not
 // included in protocol messages or persisted by the client.
 func DialWithToken(url, room, id string, caps []string, token string) (*Client, error) {
-	return dial(url, room, id, caps, token)
+	return dial(context.Background(), url, room, id, caps, token)
 }
 
-func dial(url, room, id string, caps []string, token string) (*Client, error) {
+// DialWithTokenContext applies cancellation to TCP/TLS/websocket handshake and
+// pre-welcome replay, not just to reads after a connection has been established.
+func DialWithTokenContext(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
+	return dial(ctx, url, room, id, caps, token)
+}
+
+func dial(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
 	endpoint, err := urlpkg(url, room)
 	if err != nil {
 		return nil, err
@@ -61,10 +67,15 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 		headers = make(http.Header)
 		headers.Set("Authorization", "Bearer "+token)
 	}
-	c, _, err := websocket.DefaultDialer.Dial(endpoint, headers)
+	c, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 	if err != nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 	x := &Client{Conn: c, AgentID: id, RoomID: room}
 	if err = x.Write(map[string]any{"type": "agent.hello", "agent_id": id, "capabilities": caps}); err != nil {
 		_ = c.Close()
@@ -72,6 +83,9 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 	}
 
 	deadline := time.Now().Add(dialReadTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
 	for {
 		if err = c.SetReadDeadline(deadline); err != nil {
 			_ = c.Close()
@@ -90,6 +104,10 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 	if err = c.SetReadDeadline(time.Time{}); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("clear agent welcome deadline: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		_ = c.Close()
+		return nil, err
 	}
 	return x, nil
 }
@@ -243,8 +261,8 @@ func (c *Client) dequeue() (map[string]any, bool) {
 
 func (c *Client) Close() error { return c.Conn.Close() }
 
-// CopyLocal is the data-plane primitive used by direct or relay
-// implementations. The gateway sees only metadata.
+// CopyLocal is a legacy same-process filesystem helper, not a cross-machine
+// data plane. Real network transfers use internal/relay.
 func CopyLocal(src, dst string) (size int64, sha string, err error) {
 	in, err := os.Open(src)
 	if err != nil {
@@ -263,8 +281,8 @@ func CopyLocal(src, dst string) (size int64, sha string, err error) {
 	return n, hex.EncodeToString(h.Sum(nil)), err
 }
 
-// CopyWithMode validates the selected signaling path; bytes still stay local
-// to the Agents.
+// CopyWithMode is a legacy compatibility wrapper around CopyLocal. Its mode
+// argument does not create a network transfer; use internal/relay instead.
 func CopyWithMode(mode, src, dst string) (int64, string, error) {
 	if mode != "direct" && mode != "relay" {
 		return 0, "", fmt.Errorf("unsupported transfer mode: %s", mode)

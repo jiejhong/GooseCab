@@ -70,7 +70,7 @@ interactive 模式发送的帧仍是现有协议的 `event.publish`、`capabilit
 
 - `GOOSECAB_AGENT_TOKEN` 是当前 Gateway 的共享 Bearer token。它不区分 Agent 权限，也不按 room 隔离；需要更细粒度 ACL 时应由反向代理或后续版本提供。
 - token 不应放在 URL、日志或提交到仓库。`cmd/agent -token` 只在握手 header 中发送。
-- Gateway 接收的 `input_ref`、`output_ref`、`artifact_ref`、路径引用和 SHA-256 都是元数据；文件内容不会经过 Gateway。
+- Gateway 接收的 `input_ref`、`output_ref`、`artifact_ref`、路径引用和 SHA-256 都是元数据；这些元数据 API 不接收文件内容。显式 `/api/v1/relay` 数据面会有界流式转发文件帧，但不写数据库、事件、日志或磁盘；只有接收 Agent 保存字节。见 [流式 Relay](streaming-relay.md)。
 - SQLite 数据库包含事件和这些引用，必须按其敏感等级保护磁盘和备份。
 - 启用 token 后，内置观察页支持内存中的令牌输入，通过 Authorization header 获取脱敏 HTTP 事件和 HTML 导出。不会把令牌放入 URL、本地存储或导出文档。
 - 所有 `/api` 接口以及 `/ws` 受共享 token 保护，包含 Registry、P1/P2、传输、状态和历史读写。只有页面外壳和 `/healthz` 继续公开；token 未设置时保留开发模式，无认证。默认 `:8312` 监听所有接口，不是自动回环隔离；仅本机使用时显式配置 `GOOSECAB_ADDR=127.0.0.1:8312`。

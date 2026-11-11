@@ -191,3 +191,12 @@ P2 的 plan/task/blackboard/private-session 接口当前记录编排元数据，
 Gateway 保证同 ID 的新能力调用只能保持原调用者、目标和输入，且只有绑定目标能发进度和结果；禁止通过通用 event.publish 发这三类生命周期。worker 使用持久日志去重，结果未知不自动重跑。小文本可留在事件中，输入输出各限 4096 bytes；任何文件内容仍在 Agent。本能力不是 shell 或通用任务执行器。
 
 完整命令、取结果方式、恢复语义与边界见 [真实 Agent 任务](agent-tasks.md)。
+
+
+## 独立真实协作层
+
+- 文本执行命名空间为 `cap.text.uppercase` 和受限 `cap.learned.text.*`。Learned 能力必须先在目标 Agent 显式安装并评估，不由名字自动授予执行权。调用可携带 `route` 记录已访问的 bridge ID；route 属于调用指纹，改变已存在 ID 的 route 会冲突。route 只是描述性轨迹，不是身份或授权。
+- `/api/v1/relay` 为受现有 Bearer guard 保护的 POST 传输凭证创建接口；`/api/v1/relay/connect` 为双端出站 WebSocket 配对入口。权限 secret 位于 header，不在 URL 或事件中。二进制帧不进入事件存储。详见 [流式 Relay](streaming-relay.md)。
+- `cmd/plan` 的任务分配/状态日志存放在协调 Agent 本机，真实 capability 生命周期仍经 Gateway 保存；P2 HTTP 元数据 API 不会自动执行计划。见 [任务编排](task-orchestration.md)。
+- `cmd/skill` 的 package、评估与激活在 Learner 本机；P1 HTTP API 不安装 package。见 [能力学习](capability-learning.md)。
+- `cmd/cascade` 只转发明确路由的文本能力生命周期；flat 使用独立命名空间代理身份，不伪造原 Agent，也不泛化复制聊天或文件事件。见 [级联](cascade.md)。

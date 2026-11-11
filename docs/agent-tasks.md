@@ -1,6 +1,6 @@
 # 真实 Agent 文本任务：执行、取结果与中断恢复
 
-本迭代只实现一个可验收的小闭环：调用方提交文本，指定 worker 真正执行 Unicode 大写转换，返回可读取的文本结果。不是任意 shell、文件读取、网络请求、LLM、Skill 安装或 P2 自动编排。
+本文描述最初的基础小闭环：调用方提交文本，指定 worker 真正执行 Unicode 大写转换，返回可读取的文本结果。不是任意 shell、文件读取、网络请求或 LLM。另有显式 [能力学习](capability-learning.md)、[DAG 调度](task-orchestration.md)、[级联](cascade.md) 和 [流式传输](streaming-relay.md)，都不由此基础调用隐式启用。
 
 ## 三个终端完成一次真实调用
 
@@ -56,14 +56,14 @@ go run ./cmd/invoke -room demo -id caller -target text-worker \
 
 ## 安全和兼容性
 
-- worker 是显式 opt-in；默认 read-only 和 interactive 模式仍不会执行任务。worker 只声明 `cap.text.uppercase`，禁止用 `-capabilities` 扩展执行范围。
+- worker 是显式 opt-in；默认 read-only 和 interactive 模式仍不会执行任务。worker 默认只声明 `cap.text.uppercase`；显式 `-skills` 可加入已评估的本地声明式文本能力。禁止用 `-capabilities` 任意扩展执行范围。
 - 必须显式指定目标。worker 忽略其他房间、其他目标、无目标、非该能力的事件。payload 仅允许 `{"text":"..."}`，输入及输出各最多 4096 UTF-8 字节；内容始终当文本，不求值、不调用 shell、不访问文件或外网。
 - 小文本结果是有意写入事件的受限数据，不是文件数据面。原有 `output_ref` 只是本地引用，绝不能被解释为文件已交付；本迭代不会下载这些引用。
 - Gateway 绑定新能力的调用者和目标，拒绝 ID 冲突、非目标上报、状态倒退与修改最终结果。三种 capability 生命周期必须使用专用帧，不能再经 `event.publish` 绕过检查。旧元数据能力和 P1/P2 HTTP 接口继续保留，它们不会启动此 worker。
 - 共享 token 仍不是每 Agent 独立认证或房间 ACL；有 token 的人可冒用首次声明的 Agent ID。只用于互信成员，不声称已具备多租户隔离。
 - 当前要求单 Gateway 进程，执行校验按房间/调用索引读取历史。一个调用达到 2048 条生命周期事件就拒绝继续写入，防止无限重复历史拖垮校验。拒绝携带调用 ID，仅阻断该调用，不停止 worker 的其他任务；旧的已终结回放不会重复上报。不是高吞吐任务调度器。
 - Registry 的能力列表不代表在线状态；重连后只按 worker 当前启用能力执行。无人执行不会自动换 Agent。
-- 还没有自动重连、结果保留策略、任务取消、人工审批重试、分布式 exactly-once、任意文件交付或通用 Agent Sandbox。以上不应从这个文本样例推断为已经实现。
+- 还没有自动重连、结果保留策略、任务取消、人工审批重试、分布式 exactly-once或通用 Agent Sandbox。显式文件 Relay 已独立实现，但此文本调用不会下载文件引用。以上不应从这个文本样例推断为已经实现。
 
 ## 回归验收
 

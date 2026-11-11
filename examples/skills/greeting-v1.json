@@ -1,0 +1,1 @@
+{"format":1,"capability":"cap.learned.text.greeting","version":1,"operations":[{"op":"trim"},{"op":"lower"},{"op":"prefix","value":"hello "}],"tests":[{"input":" WORLD ","want":"hello world"},{"input":"鸿梦阁","want":"hello 鸿梦阁"}]}

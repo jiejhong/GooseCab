@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jiejhong/GooseCab/internal/protocol"
 )
@@ -13,14 +14,20 @@ import (
 // connection. A timeout/disconnect is uncertainty, never permission to resubmit
 // with a new ID. Repeating the exact same call/ID can retrieve a cached result.
 func (c *Client) InvokeText(ctx context.Context, requestID, target, text string, onProgress func(protocol.CapabilityProgress)) (protocol.CapabilityResult, error) {
+	return c.InvokeTextCapability(ctx, requestID, TextCapability, target, text, onProgress)
+}
+
+// InvokeTextCapability uses the same guarded lifecycle for a locally installed
+// declarative text skill. The caller cannot use it to execute arbitrary tools.
+func (c *Client) InvokeTextCapability(ctx context.Context, requestID, capabilityID, target, text string, onProgress func(protocol.CapabilityProgress)) (protocol.CapabilityResult, error) {
 	var result protocol.CapabilityResult
 	if strings.TrimSpace(target) == "" || strings.TrimSpace(requestID) == "" || len(requestID) > 128 {
 		return result, fmt.Errorf("text calls require a target and request ID of at most 128 bytes")
 	}
-	wanted := protocol.CapabilityInvoke{RequestID: requestID, CapabilityID: TextCapability, TargetAgentID: target, Payload: map[string]any{"text": text}}
-	if check := executeText(wanted); check.Status != "completed" {
-		return result, fmt.Errorf("%s", check.Error)
+	if !protocol.IsExecutableTextCapability(capabilityID) || !utf8.ValidString(text) || len(text) > MaxTextBytes {
+		return result, fmt.Errorf("a bounded text capability and at most 4096 UTF-8 input bytes are required")
 	}
+	wanted := protocol.CapabilityInvoke{RequestID: requestID, CapabilityID: capabilityID, TargetAgentID: target, Payload: map[string]any{"text": text}}
 	// Dial buffered the complete pre-welcome replay. Fold it before acting:
 	// an old unknown may have been reconciled by a later durable result. A
 	// completed cached call can be retrieved even with the worker offline.
@@ -71,7 +78,7 @@ func (c *Client) InvokeText(ctx context.Context, requestID, target, text string,
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if err := c.Invoke(requestID, TextCapability, target, wanted.Payload); err != nil {
+	if err := c.Invoke(requestID, capabilityID, target, wanted.Payload); err != nil {
 		return result, fmt.Errorf("submission outcome uncertain; do not create a new request ID: %w", err)
 	}
 	accepted := false

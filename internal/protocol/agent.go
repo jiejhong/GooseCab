@@ -26,10 +26,11 @@ type CapabilityAnnounce struct {
 	Manifest     any    `json:"manifest,omitempty"`
 }
 type CapabilityInvoke struct {
-	RequestID     string `json:"request_id"`
-	CapabilityID  string `json:"capability_id"`
-	TargetAgentID string `json:"target_agent_id,omitempty"`
-	Payload       any    `json:"payload,omitempty"`
+	Route         []string `json:"route,omitempty"`
+	RequestID     string   `json:"request_id"`
+	CapabilityID  string   `json:"capability_id"`
+	TargetAgentID string   `json:"target_agent_id,omitempty"`
+	Payload       any      `json:"payload,omitempty"`
 }
 type CapabilityProgress struct {
 	Status    string `json:"status,omitempty"`

@@ -53,6 +53,7 @@ func TestServerProtectsEveryAPIRoute(t *testing.T) {
 		{"POST", "/api/plans", 400}, {"POST", "/api/tasks", 400}, {"POST", "/api/tasks/missing/retry", 400},
 		{"GET", "/api/capability-resolve?q=test", 200}, {"POST", "/api/blackboards", 400}, {"POST", "/api/private-sessions", 400},
 		{"POST", "/api/transfers", 400}, {"POST", "/api/transfers/missing/progress", 400},
+		{"POST", "/api/v1/relay", 400}, {"GET", "/api/v1/relay/connect", 404},
 		{"GET", "/api/events?room_id=test", 200}, {"GET", "/api/events/export.html?room_id=test", 200},
 		{"GET", "/api/v1/agent/connect", 400}, {"GET", "/ws", 400},
 		{"GET", "/api/future-route", 404}, {"GET", "/api", 301},

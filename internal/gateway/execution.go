@@ -43,7 +43,7 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 	switch v := payload.(type) {
 	case protocol.CapabilityInvoke:
 		id = v.RequestID
-		strict = v.CapabilityID == executableTextCapability
+		strict = protocol.IsExecutableTextCapability(v.CapabilityID)
 	case protocol.CapabilityProgress:
 		id = v.RequestID
 	case protocol.CapabilityResult:
@@ -70,7 +70,7 @@ func validateExecution(events []protocol.Event, actor, typ string, payload any) 
 			if original == nil {
 				original = &v
 				caller = event.Actor.ID
-				strict = strict || v.CapabilityID == executableTextCapability
+				strict = strict || protocol.IsExecutableTextCapability(v.CapabilityID)
 			}
 		case "capability.progress":
 			if original != nil && event.Actor.ID == original.TargetAgentID {

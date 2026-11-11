@@ -21,6 +21,7 @@ func run() int {
 	room := flag.String("room", "demo", "room ID")
 	id := flag.String("id", "caller", "caller Agent ID; keep it stable for the same request")
 	target := flag.String("target", "", "worker Agent ID (required)")
+	capability := flag.String("capability", agent.TextCapability, "bounded text capability ID (built-in or explicitly installed skill)")
 	request := flag.String("request-id", "", "stable unique invocation ID (required; reuse only for identical calls)")
 	text := flag.String("text", "", "UTF-8 input text, maximum 4096 bytes; visible in room history")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall result wait; timeout never triggers a retry")
@@ -34,13 +35,13 @@ func run() int {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
-	c, err := agent.DialWithToken(*url, *room, *id, nil, *token)
+	c, err := agent.DialWithTokenContext(ctx, *url, *room, *id, nil, *token)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "connect:", err)
 		return 1
 	}
 	defer c.Close()
-	result, err := c.InvokeText(ctx, *request, *target, *text, func(p protocol.CapabilityProgress) { _ = json.NewEncoder(os.Stderr).Encode(p) })
+	result, err := c.InvokeTextCapability(ctx, *request, *capability, *target, *text, func(p protocol.CapabilityProgress) { _ = json.NewEncoder(os.Stderr).Encode(p) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

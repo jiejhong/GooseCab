@@ -5,9 +5,12 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 ## 当前状态
 
 - **P0**：WebSocket 实时控制面、SQLite WAL + 进程内 EventBus、Agent Capability Registry、能力调用和本地/Relay 文件传输元数据。
-- **P1**：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态和版本回滚元数据。
+- **P1**：保留 Teach Session/Evaluator 元数据 API；新增真实声明式文本能力包的传递、评估、本地安装、离线复用与版本回滚。见 [能力学习](docs/capability-learning.md)。
 - **真实文本任务**：显式 worker 执行 `cap.text.uppercase`，调用 ID 贯穿执行与结果；持久去重，断线不自动重跑。见 [真实 Agent 任务](docs/agent-tasks.md)。
-- **P2**：Planner/Capability Resolver、Task DAG、重试换 Agent、公共 Blackboard、私有会话和 Provider Adapter 接口。真正的并发调度和结果编排仍在后续迭代。
+- **P2**：保留规划元数据 API；新增 Agent 侧显式文本 DAG 并发调度、依赖结果编排、持久分配/状态与人工只读恢复。见 [任务编排](docs/task-orchestration.md)。不自动规划、换 Agent 或重试不确定任务。
+- **真实网络协作**：出站 WebSocket 流式文件 Relay（默认最多 256 MiB，可配置），以及两个 Gateway 间的 Leader/命名空间 flat 代理级联。见 [流式传输](docs/streaming-relay.md)、[网关级联](docs/cascade.md)。
+
+组合验收 `python3 tests/collaboration-smoke.py` 会启动两个独立 Gateway 进程、多个 worker/bridge/CLI 进程，验证能力传递、老师退出后复用、跨网关 DAG 与 32 MiB 文件完整性，并检查网关内存增长及超限拒绝。该自动化使用单机 TCP 回环，不冒充已完成两台物理机器的网络、TLS 和防火墙验收。
 
 ## 快速开始
 
@@ -34,7 +37,7 @@ curl -fsS http://127.0.0.1:8312/api/status
 
 ## 本地启动两个 Agent
 
-仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；这两种模式只打印/发送协议事件，不执行能力或接收文件字节。真实执行必须显式开启 `-mode worker` 并提供持久日志 `-state`，见 [运行安全文本任务](docs/agent-tasks.md)。
+仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；这两种模式只打印/发送协议事件，不执行能力或接收文件字节。真实执行必须显式开启 `-mode worker` 并提供持久日志 `-state`；可选 `-skills` 加载本机已验证能力包，见 [运行安全文本任务](docs/agent-tasks.md)。
 
 先保持上面的 Gateway 运行，再开两个终端：
 
@@ -80,6 +83,7 @@ go run ./cmd/agent -mode interactive \
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GOOSECAB_DB` | `goosecab.db` | SQLite 数据库路径。生产环境应使用持久化磁盘。 |
+| `GOOSECAB_RELAY_MAX_BYTES` | `268435456`（256 MiB） | 单文件上限，正整数字节且不高于默认值；例如 `33554432` 为 32 MiB。 |
 | `GOOSECAB_ADDR` | `:8312` | HTTP、观察页和 Agent WebSocket 共用的监听地址；也可用 `cmd/server -addr`。 |
 | `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，所有 `/api` 接口（含状态、Registry、P1/P2、传输、历史及 HTML 导出）和 `/ws` 要求 `Authorization: Bearer <token>`。 |
 | `GOOSECAB_ALLOW_CROSS_ORIGIN` | `0` | 设为 `1` 才允许非同源浏览器 WebSocket；只应在反向代理已做来源限制时启用。 |
@@ -131,12 +135,12 @@ go run ./cmd/agent -mode interactive \
 
 如果同机还要启动第二个 Gateway，必须使用不同的 `GOOSECAB_ADDR` 和 `GOOSECAB_DB`（例如 `:8313` 与 `.data/secondary.db`）。
 
-当前协议保留两种部署语义，先由 Agent/编排层实现，Gateway 不做隐式桥接：
+当前提供明确配置的 `cmd/cascade`，使用两个 Gateway 的出站 Agent 连接实现：
 
-- **cascade（Leader Agent）**：本地 Gateway 把一个 Leader Agent 作为代表连接到上游 Gateway。Leader 负责把允许的本地事件/能力按协议转发，并在上游 room 使用独立的 Agent ID；跨 Gateway 的认证、过滤和失败重试由 Leader 实现。
-- **flat/transparent**：本地 Agent 直接连接远程 Gateway，并使用与本地视图相同的 `room` ID。它在上游是普通 Agent，不创建第二套 room，也不要求 Gateway 互相连接。
+- **leader**：一个上游代表身份按能力路由到指定下游 worker。
+- **flat**：下游 worker 以 `bridge-id/worker-id` 的独立代理身份出现在上游，不伪造原 worker 身份，也不自动镜像目录。
 
-两种模式都继续使用现有 `agent.hello`、`event.publish`、`capability.invoke`、`capability.progress` 和 `capability.result` 帧；本版本不实现复杂的 Gateway-to-Gateway 桥接。
+直接连接远程 Gateway 的普通 Agent 仍适用于无需代理的平坦部署。真正字节流走独立 Relay，不进入级联事件。级联保留原请求关联、路由轨迹与持久去重，未知任务不自动重发。可运行配置、双进程验收和限制见 [网关级联](docs/cascade.md)。
 
 ## API 概览
 
@@ -149,7 +153,8 @@ go run ./cmd/agent -mode interactive \
 - `GET /api/events/export.html?room_id=<id>`：下载漂亮的自包含 HTML 聊天记录，离线可读、可打印。
 - `/ws?room_id=<id>`：只读原始观察 WebSocket，供自定义客户端使用；所有写入帧都会被拒绝。
 - `/api/v1/agent/connect?room_id=<id>`：Agent 出站控制面 WebSocket。
-- `POST /api/transfers`、`POST /api/transfers/{file_id}`：记录文件传输请求和状态。文件字节不会经过 Gateway。
+- `POST /api/transfers`、`POST /api/transfers/{file_id}`：旧传输元数据 API，不触发字节传输。
+- `POST /api/v1/relay`、`GET /api/v1/relay/connect`：创建短时传输凭证并配对出站数据流。Gateway 仅有界流式转发，绝不保存文件字节；接收 Agent 校验并本地落盘。
 
 ### P1
 
@@ -164,7 +169,7 @@ go run ./cmd/agent -mode interactive \
 - `GET /api/capability-resolve?q=`：从 Registry 查找候选 Agent。
 - `POST /api/blackboards`、`POST /api/private-sessions`：创建公共黑板和私有会话元数据。
 
-P1/P2 当前 API 主要记录元数据和事件，不会自动调度真实的 Agent 进程。请求体字段和事件帧示例见协议文档。
+P1/P2 HTTP API 仍主要记录元数据和事件，不会自动调度真实 Agent。真实任务/学习/级联由显式 CLI 启动，不应把 HTTP 元数据响应视为执行成功。请求体字段和事件帧示例见协议文档。
 
 ## 查看和导出交互记录
 
@@ -185,7 +190,8 @@ gofmt -w ./cmd ./internal
 go vet ./...
 go test ./...
 go test -race ./...
-node tests/observer.test.cjs # 可选本地 UI 行为检查（Node.js 18+）
+node tests/observer.test.cjs # UI 行为检查（Node.js 18+）
+python3 tests/collaboration-smoke.py # 真实独立进程与 TCP 网络组合验收（Python 3）
 ```
 
-CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 和无依赖的 Node UI 行为检查。
+CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 、无依赖的 Node UI 行为检查和 Python 独立进程网络组合验收。
