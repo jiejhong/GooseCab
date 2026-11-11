@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,6 +32,7 @@ type Client struct {
 	AgentID string
 	RoomID  string
 
+	writeMu   sync.Mutex
 	pendingMu sync.Mutex
 	pending   []map[string]any
 }
@@ -112,7 +114,35 @@ func urlpkg(raw, room string) (string, error) {
 	return u.String(), nil
 }
 
-func (c *Client) Write(v any) error { return c.Conn.WriteJSON(v) }
+func (c *Client) Write(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(DefaultReadTimeout)); err != nil {
+		return err
+	}
+	return c.Conn.WriteJSON(v)
+}
+
+// ReadContext is for long-lived readers. Cancellation closes the connection;
+// unlike a websocket timeout it cannot leave a reader spinning on a poisoned socket.
+func (c *Client) ReadContext(ctx context.Context) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if msg, ok := c.dequeue(); ok {
+		return msg, nil
+	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	var msg map[string]any
+	if err := c.Conn.ReadJSON(&msg); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("read agent event: %w", err)
+	}
+	return msg, nil
+}
 
 // SendChat publishes a room chat message through the event stream. Chat text
 // is metadata only; the gateway does not execute or interpret it.
@@ -134,10 +164,10 @@ func (c *Client) SendEvent(eventType string, payload any) error {
 	return c.Write(map[string]any{
 		"type": "event.publish",
 		"event": protocol.Event{
-			RoomID: c.RoomID,
-			Type:   eventType,
-			Actor:  protocol.Actor{Kind: "agent", ID: c.AgentID},
-			TS:     time.Now().UTC(),
+			RoomID:  c.RoomID,
+			Type:    eventType,
+			Actor:   protocol.Actor{Kind: "agent", ID: c.AgentID},
+			TS:      time.Now().UTC(),
 			Payload: payload,
 		},
 	})
@@ -240,4 +270,15 @@ func CopyWithMode(mode, src, dst string) (int64, string, error) {
 		return 0, "", fmt.Errorf("unsupported transfer mode: %s", mode)
 	}
 	return CopyLocal(src, dst)
+}
+
+// Persisted room events may legitimately use the type "error". Only the
+// unwrapped control frame is a protocol rejection, including during replay.
+func isProtocolError(msg map[string]any) bool {
+	_, hasEventID := msg["event_id"]
+	_, hasRoom := msg["room_id"]
+	_, hasSeq := msg["seq"]
+	_, hasActor := msg["actor"]
+	code, _ := msg["code"].(string)
+	return msg["type"] == "error" && code != "" && !hasEventID && !hasRoom && !hasSeq && !hasActor
 }

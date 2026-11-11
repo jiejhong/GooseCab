@@ -173,3 +173,21 @@ P2 的 plan/task/blackboard/private-session 接口当前记录编排元数据，
 两接口在设置 `GOOSECAB_AGENT_TOKEN` 时要求 `Authorization: Bearer <token>`。拒绝 URL token 参数，并返回 `Cache-Control: no-store`。共享 token 不是分房间授权；不同租户仍需反向代理或后续 ACL。未设置 token 时必须自行限制网络访问。网页通过 HTTP 分页和每 5 秒轮询展示持久化事件，不会用原始 WebSocket 数据绕过脱敏。
 
 这是用于阅读和分享的脱敏副本：凭据字段（token/secret/password/API key/Authorization/cookie 等）、文件路径与 `*_ref` 引用、可识别的本地路径和当前网关 token 被隐藏；常见带引号凭据赋值也被过滤。存储的原始事件不会被改写，导出不会解引用路径、读取或打包文件字节。自由文本中未识别的秘密仍可能存在，分享前必须人工复核。该功能不提供原始数据备份或任意文件下载。
+
+
+## 可执行文本能力（向后兼容扩展）
+
+`cap.text.uppercase` 是 opt-in worker 唯一的真实执行能力；旧能力仍是原有元数据流程。调用必须带显式目标及最多 128 bytes 的请求 ID。相关事件仍使用 `capability.invoke/progress/result`，`correlation_id=request_id`。
+
+```json
+{"type":"capability.invoke","request_id":"text-1","capability_id":"cap.text.uppercase","target_agent_id":"text-worker","payload":{"text":"Hello"}}
+{"type":"capability.progress","request_id":"text-1","status":"running","message":"Executing bounded text capability"}
+{"type":"capability.progress","request_id":"text-1","status":"completed","percent":100,"message":"Execution complete; publishing result"}
+{"type":"capability.result","request_id":"text-1","status":"completed","result_available":true,"output":{"text":"HELLO","media_type":"text/plain"}}
+```
+
+新增 progress.status 与 result.result_available/output；旧客户端应忽略不认识的字段。progress.completed 仅表示执行完成；只有 completed result 同时具备 `result_available=true` 和内联 `output.text` 才表示可取结果。失败及不确定分别使用 result.status=`failed`/`unknown`，`result_available=false` 并提供 `error`。旧 `output_ref` 不等于交付。
+
+Gateway 保证同 ID 的新能力调用只能保持原调用者、目标和输入，且只有绑定目标能发进度和结果；禁止通过通用 event.publish 发这三类生命周期。worker 使用持久日志去重，结果未知不自动重跑。小文本可留在事件中，输入输出各限 4096 bytes；任何文件内容仍在 Agent。本能力不是 shell 或通用任务执行器。
+
+完整命令、取结果方式、恢复语义与边界见 [真实 Agent 任务](agent-tasks.md)。

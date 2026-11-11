@@ -6,6 +6,7 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 
 - **P0**：WebSocket 实时控制面、SQLite WAL + 进程内 EventBus、Agent Capability Registry、能力调用和本地/Relay 文件传输元数据。
 - **P1**：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态和版本回滚元数据。
+- **真实文本任务**：显式 worker 执行 `cap.text.uppercase`，调用 ID 贯穿执行与结果；持久去重，断线不自动重跑。见 [真实 Agent 任务](docs/agent-tasks.md)。
 - **P2**：Planner/Capability Resolver、Task DAG、重试换 Agent、公共 Blackboard、私有会话和 Provider Adapter 接口。真正的并发调度和结果编排仍在后续迭代。
 
 ## 快速开始
@@ -14,7 +15,7 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 
 ```bash
 git clone https://github.com/jiejhong/GooseCab.git
-cd GooseCab/goosecab
+cd GooseCab
 go mod download
 mkdir -p .data
 GOOSECAB_DB="$PWD/.data/goosecab.db" go run ./cmd/server
@@ -33,7 +34,7 @@ curl -fsS http://127.0.0.1:8312/api/status
 
 ## 本地启动两个 Agent
 
-仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；客户端只打印/发送协议事件，不执行能力或接收文件字节。
+仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；这两种模式只打印/发送协议事件，不执行能力或接收文件字节。真实执行必须显式开启 `-mode worker` 并提供持久日志 `-state`，见 [运行安全文本任务](docs/agent-tasks.md)。
 
 先保持上面的 Gateway 运行，再开两个终端：
 
@@ -72,7 +73,7 @@ go run ./cmd/agent -mode interactive \
   -room demo -id agent-a -capabilities cap.echo
 ```
 
-`event` 的 payload 和 `invoke` 的 payload 必须是 JSON；`invoke` 的 target agent 可省略。
+`event` 的 payload 和 `invoke` 的 payload 必须是 JSON；旧元数据能力的 `invoke` target agent 可省略；`cap.text.uppercase` 必须指定目标。
 
 ## 配置
 
@@ -101,7 +102,7 @@ go run ./cmd/agent -url ws://127.0.0.1:8312/api/v1/agent/connect \
 
 - 未设置 token 时仍支持原来的本地开发调用；设置 token 后所有 API 请求都必须带 Bearer header，旧的无认证 HTTP 脚本需补充 header。`/` 观察页外壳与 `/healthz` 仍公开，服务详情需要认证。
 - `/ws` 是只读观察通道。发送事件必须改用 `/api/v1/agent/connect`，先发送非空 `agent_id` 的 `agent.hello`，连接的 `room_id` 必须非空。同一连接不能再次切换 Agent ID。
-- `event.publish` 未填 room/actor 时由服务器补齐；显式填写但与连接不一致时返回错误，不写库。`agent.hello`、`agent.welcome`、`capability.announce` 不能通过通用事件绕过专用处理。
+- `event.publish` 未填 room/actor 时由服务器补齐；显式填写但与连接不一致时返回错误，不写库。`agent.hello`、`agent.welcome`、`capability.announce` 以及 `capability.invoke/progress/result` 不能通过通用事件绕过专用处理。
 - 新自动事件 ID 是不透明 UUID，不再使用 `type-seq`。按房间原子分配 `seq`，保留旧 ID、已有记录和调用者显式 ID；客户端不要从 ID 推导类型或序号。
 - Registry 是全网关、进程内能力目录。hello 会登记 Agent，announce 合并能力，重连 hello 替换该 Agent 的能力集合（保留仍在集合内的能力详细信息）。断开不删除目录条目，重启后需重新注册；目录不代表在线状态。Agent ID 应在网关内唯一。
 - 共享 token 不是每个 Agent 的身份凭证或房间 ACL。持有 token 者仍可选择连接房间、首次声明 Agent ID，以及调用管理 API；不适合不互信的多租户部署。
@@ -183,7 +184,8 @@ HTML 是脱敏阅读副本，不是原始备份：凭据字段、文件引用和
 gofmt -w ./cmd ./internal
 go vet ./...
 go test ./...
+go test -race ./...
 node tests/observer.test.cjs # 可选本地 UI 行为检查（Node.js 18+）
 ```
 
-CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...` 、`go test ./...` 和无依赖的 Node UI 行为检查。
+CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 和无依赖的 Node UI 行为检查。
