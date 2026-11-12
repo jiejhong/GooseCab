@@ -39,6 +39,17 @@ type Client struct {
 	pending   []map[string]any
 }
 
+// ProtocolError preserves a gateway rejection instead of reporting it as a
+// welcome timeout. Code is machine-readable; Message is for diagnostics.
+type ProtocolError struct {
+	Code    string
+	Message string
+}
+
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("gateway rejected agent: %s: %s", e.Code, e.Message)
+}
+
 // Dial establishes an agent connection and waits for the welcome message. A
 // gateway may replay room events before processing the new hello, so those
 // frames are retained for the first Read call instead of being discarded.
@@ -97,6 +108,12 @@ func dial(ctx context.Context, url, room, id string, caps []string, token string
 		if err = c.ReadJSON(&msg); err != nil {
 			_ = c.Close()
 			return nil, fmt.Errorf("agent welcome: %w", err)
+		}
+		if isProtocolError(msg) {
+			_ = c.Close()
+			code, _ := msg["code"].(string)
+			message, _ := msg["message"].(string)
+			return nil, &ProtocolError{Code: code, Message: message}
 		}
 		if typ, _ := msg["type"].(string); typ == "agent.welcome" {
 			break

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/jiejhong/GooseCab/internal/eventbus"
@@ -69,10 +70,17 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 		}
 		defer c.Close()
 		c.SetReadLimit(1 << 20)
-		sub := w.Bus.Subscribe(256)
+		sub := w.Bus.SubscribeRoom(room, 256)
 		defer w.Bus.Unsubscribe(sub)
 		var writeMu sync.Mutex
-		writeJSON := func(v any) error { writeMu.Lock(); defer writeMu.Unlock(); return c.WriteJSON(v) }
+		writeJSON := func(v any) error {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return err
+			}
+			return c.WriteJSON(v)
+		}
 		reject := func(code, message string) {
 			_ = writeJSON(map[string]any{"type": "error", "code": code, "message": message})
 		}
@@ -98,6 +106,10 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				select {
 				case evt, ok := <-sub:
 					if !ok {
+						_ = c.WriteControl(websocket.CloseMessage,
+							websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "event buffer overflow; reconnect with resume_seq"),
+							time.Now().Add(time.Second))
+						_ = c.Close()
 						return
 					}
 					if evt.RoomID == room && evt.Seq > after {
