@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// Metadata describes a local file transfer. The gateway never receives file bytes.
+// Metadata describes a file transfer. This metadata service never receives
+// file bytes; the separate relay streams bytes without persistence.
 type Metadata struct {
 	RoomID        string    `json:"room_id,omitempty"`
 	ID            string    `json:"file_id"`

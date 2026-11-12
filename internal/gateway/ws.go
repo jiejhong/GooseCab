@@ -171,7 +171,7 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				}
 				valid := true
 				for _, cap := range hello.Capabilities {
-					if strings.TrimSpace(cap) == "" {
+					if candidate := (protocol.CapabilityAnnounce{CapabilityID: cap}); protocol.NormalizeAnnouncement(&candidate) != nil {
 						valid = false
 					}
 				}
@@ -188,7 +188,9 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					return
 				}
 				for _, cap := range hello.Capabilities {
-					publish("capability.announce", cap, "", protocol.CapabilityAnnounce{AgentID: agentID, CapabilityID: cap})
+					announcement := protocol.CapabilityAnnounce{AgentID: agentID, CapabilityID: cap}
+					_ = protocol.NormalizeAnnouncement(&announcement)
+					publish("capability.announce", cap, "", announcement)
 				}
 			case "capability.announce":
 				var v protocol.CapabilityAnnounce
@@ -201,8 +203,12 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					continue
 				}
 				v.AgentID = agentID
+				if err := protocol.ValidateAnnouncementJSON(raw, &v); err != nil {
+					reject("invalid_announce", err.Error())
+					continue
+				}
 				persistWith(protocol.Event{Type: typ, CapabilityID: v.CapabilityID, Payload: v}, func() {
-					w.Registry.Announce(agentID, registry.Capability{ID: v.CapabilityID, Name: v.Name, Version: v.Version, Manifest: v.Manifest})
+					w.Registry.Announce(agentID, registry.CapabilityFromAnnouncement(v))
 				})
 			case "capability.invoke":
 				var v protocol.CapabilityInvoke
@@ -210,21 +216,27 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					reject("invalid_invoke", "request_id and capability_id are required")
 					continue
 				}
-				publish(typ, v.CapabilityID, v.RequestID, v)
+				if err := w.publishCapability(r.Context(), room, agentID, typ, v.CapabilityID, v.RequestID, v); err != nil {
+					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				}
 			case "capability.progress":
 				var v protocol.CapabilityProgress
 				if json.Unmarshal(raw, &v) != nil || strings.TrimSpace(v.RequestID) == "" {
 					reject("invalid_progress", "request_id is required")
 					continue
 				}
-				publish(typ, "", v.RequestID, v)
+				if err := w.publishCapability(r.Context(), room, agentID, typ, "", v.RequestID, v); err != nil {
+					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				}
 			case "capability.result":
 				var v protocol.CapabilityResult
 				if json.Unmarshal(raw, &v) != nil || strings.TrimSpace(v.RequestID) == "" {
 					reject("invalid_result", "request_id is required")
 					continue
 				}
-				publish(typ, "", v.RequestID, v)
+				if err := w.publishCapability(r.Context(), room, agentID, typ, "", v.RequestID, v); err != nil {
+					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				}
 			case "transfer.request", "transfer.accepted", "transfer.progress", "transfer.completed", "transfer.failed":
 				var payload map[string]any
 				_ = json.Unmarshal(raw, &payload)
@@ -247,7 +259,7 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					reject("identity_mismatch", "event actor must match the connection")
 					continue
 				}
-				if evt.Type == "agent.hello" || evt.Type == "agent.welcome" || evt.Type == "capability.announce" {
+				if evt.Type == "agent.hello" || evt.Type == "agent.welcome" || evt.Type == "capability.announce" || evt.Type == "capability.invoke" || evt.Type == "capability.progress" || evt.Type == "capability.result" {
 					reject("reserved_event", "use the dedicated protocol frame for this event type")
 					continue
 				}

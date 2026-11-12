@@ -1,0 +1,11 @@
+{
+  "id": "retry-lesson",
+  "version": 1,
+  "title": "Retry uncertain tasks carefully",
+  "body": "Synthetic experience: retain the original request ID after a timeout. Inspect the durable result before retrying an operation with possible external effects.",
+  "tags": ["reliability", "retry"],
+  "source": "synthetic-example",
+  "provenance_ids": ["synthetic-incident-001"],
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}

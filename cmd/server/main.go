@@ -13,6 +13,7 @@ import (
 	"github.com/jiejhong/GooseCab/internal/p1"
 	"github.com/jiejhong/GooseCab/internal/p2"
 	"github.com/jiejhong/GooseCab/internal/registry"
+	"github.com/jiejhong/GooseCab/internal/relay"
 	"github.com/jiejhong/GooseCab/internal/store"
 	"github.com/jiejhong/GooseCab/internal/transfer"
 )
@@ -31,13 +32,18 @@ func main() {
 	flag.StringVar(&addr, "addr", addr, "HTTP and WebSocket listen address (also GOOSECAB_ADDR)")
 	flag.Parse()
 
+	relayConfig, err := relayConfigFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	s, err := store.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer s.Close()
 
-	h := newServerHandler(s, addr, path)
+	h := newServerHandlerWithRelayConfig(s, addr, path, relayConfig)
 	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)
 	log.Fatal(http.ListenAndServe(addr, h))
 }
@@ -45,8 +51,17 @@ func main() {
 // newServerHandler assembles the production stack with authentication outside
 // every route, including status and both WebSocket endpoints.
 func newServerHandler(s *store.Store, addr, path string) http.Handler {
+	return newServerHandlerWithRelayConfig(s, addr, path, relay.Config{})
+}
+
+func newServerHandlerWithRelayConfig(s *store.Store, addr, path string, relayConfig relay.Config) http.Handler {
 	api := &gateway.API{Registry: registry.New()}
 	base := http.NewServeMux()
+	// The relay is deliberately outside the event/store stack. It only pairs
+	// bounded streams; agent-local recipients verify and store the bytes.
+	relayHandler := relay.New(relayConfig)
+	base.Handle("/api/v1/relay", relayHandler)
+	base.Handle("/api/v1/relay/", relayHandler)
 	base.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "addr": addr})

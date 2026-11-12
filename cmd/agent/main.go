@@ -1,7 +1,8 @@
 // Command agent is a small protocol client for local development and
 // deployment smoke checks. It supports a read-only event stream as well as a
 // line-oriented interactive mode for publishing chat/events and invoking a
-// capability. The client only makes an outbound WebSocket connection.
+// capability, plus an opt-in bounded text worker with a durable journal.
+// The client only makes an outbound WebSocket connection.
 package main
 
 import (
@@ -22,20 +23,30 @@ import (
 	"time"
 
 	"github.com/jiejhong/GooseCab/internal/agent"
+	"github.com/jiejhong/GooseCab/internal/knowledge"
+	"github.com/jiejhong/GooseCab/internal/mcpclient"
+	"github.com/jiejhong/GooseCab/internal/skillbundle"
+	"github.com/jiejhong/GooseCab/internal/skills"
 )
 
 const (
 	modeReadOnly    = "read-only"
 	modeInteractive = "interactive"
+	modeWorker      = "worker"
 )
 
 type options struct {
-	url          string
-	room         string
-	id           string
-	capabilities string
-	token        string
-	mode         string
+	url            string
+	room           string
+	id             string
+	capabilities   string
+	token          string
+	mode           string
+	state          string
+	skills         string
+	skillBundles   string
+	mcpStore       string
+	knowledgeStore string
 }
 
 func main() {
@@ -45,7 +56,12 @@ func main() {
 	flag.StringVar(&opts.id, "id", "", "agent ID (required)")
 	flag.StringVar(&opts.capabilities, "capabilities", "", "comma-separated capability IDs announced in agent.hello")
 	flag.StringVar(&opts.token, "token", "", "Gateway bearer token (optional; defaults to GOOSECAB_AGENT_TOKEN)")
-	flag.StringVar(&opts.mode, "mode", modeReadOnly, "client mode: read-only or interactive")
+	flag.StringVar(&opts.mode, "mode", modeReadOnly, "client mode: read-only, interactive or worker")
+	flag.StringVar(&opts.state, "state", "", "persistent execution journal (required for worker mode; reuse on every restart)")
+	flag.StringVar(&opts.skills, "skills", "", "optional agent-local evaluated skill store (worker mode only)")
+	flag.StringVar(&opts.skillBundles, "skill-bundles", "", "local reviewed Skill bundle store (worker mode; no implicit approval)")
+	flag.StringVar(&opts.mcpStore, "mcp-store", "", "local approved MCP manifest store (worker mode; credentials stay local)")
+	flag.StringVar(&opts.knowledgeStore, "knowledge-store", "", "local knowledge store owned by -id (worker mode; only explicit shares exposed)")
 	flag.Parse()
 
 	if strings.TrimSpace(opts.id) == "" {
@@ -59,7 +75,68 @@ func main() {
 		opts.token = os.Getenv("GOOSECAB_AGENT_TOKEN")
 	}
 
-	c, err := agent.DialWithToken(opts.url, opts.room, opts.id, splitCSV(opts.capabilities), opts.token)
+	var executor *agent.Executor
+	if (opts.skills != "" || opts.skillBundles != "" || opts.mcpStore != "" || opts.knowledgeStore != "") && mode != modeWorker {
+		log.Fatal("capability stores require explicit -mode worker")
+	}
+	caps := splitCSV(opts.capabilities)
+	if mode == modeWorker {
+		if len(caps) > 0 {
+			log.Fatal("worker mode announces only enabled local capabilities; omit -capabilities")
+		}
+		executor, err = agent.OpenExecutor(opts.state)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer executor.Close()
+		if opts.skills != "" {
+			localSkills, openErr := skills.Open(opts.skills)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer localSkills.Close()
+			executor.UseSkills(localSkills)
+		}
+		if opts.skillBundles != "" {
+			store, openErr := skillbundle.Open(opts.skillBundles)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			if err = executor.UseProvider(store); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if opts.mcpStore != "" {
+			store, openErr := mcpclient.Open(opts.mcpStore)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			provider, providerErr := store.Provider()
+			if providerErr != nil {
+				log.Fatal(providerErr)
+			}
+			if err = executor.UseProvider(provider); err != nil {
+				log.Fatal(err)
+			}
+		}
+		if opts.knowledgeStore != "" {
+			store, openErr := knowledge.Open(opts.knowledgeStore, opts.id)
+			if openErr != nil {
+				log.Fatal(openErr)
+			}
+			defer store.Close()
+			if err = executor.UseProvider(store); err != nil {
+				log.Fatal(err)
+			}
+		}
+		caps, err = executor.Capabilities()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	c, err := agent.DialWithToken(opts.url, opts.room, opts.id, caps, opts.token)
 	if err != nil {
 		log.Fatalf("connect agent %q: %v", opts.id, err)
 	}
@@ -73,6 +150,13 @@ func main() {
 		_ = c.Close()
 	}()
 
+	if mode == modeWorker {
+		err = agent.RunExecutor(ctx, c, executor, func(msg map[string]any) error { return json.NewEncoder(os.Stdout).Encode(msg) })
+		if err != nil && ctx.Err() == nil {
+			log.Fatalf("worker stopped: %v; restart with the same -state file; do not create a new request ID for uncertain work", err)
+		}
+		return
+	}
 	if err := run(ctx, c, mode, os.Stdin, os.Stdout, os.Stderr); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
@@ -82,10 +166,12 @@ func normalizeMode(raw string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "read-only", "readonly", "read_only", "read":
 		return modeReadOnly, nil
+	case modeWorker:
+		return modeWorker, nil
 	case modeInteractive, "interact":
 		return modeInteractive, nil
 	default:
-		return "", fmt.Errorf("unsupported -mode %q (want read-only or interactive)", raw)
+		return "", fmt.Errorf("unsupported -mode %q (want read-only, interactive or worker)", raw)
 	}
 }
 
@@ -103,7 +189,7 @@ func run(ctx context.Context, c *agent.Client, mode string, in io.Reader, out, e
 func runReadOnly(ctx context.Context, c *agent.Client, out io.Writer) error {
 	encoder := json.NewEncoder(out)
 	for {
-		msg, err := c.ReadWithTimeout(time.Minute)
+		msg, err := c.ReadContext(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -124,11 +210,13 @@ func runReadOnly(ctx context.Context, c *agent.Client, out io.Writer) error {
 // every event, including capability.progress and capability.result, as JSON.
 // Commands are intentionally small and map directly to Client methods:
 //
-//   chat <text>
-//   event <event-type> [json-payload]
-//   invoke <request-id> <capability-id> [target-agent-id] [json-payload]
-//   help | quit
+//	chat <text>
+//	event <event-type> [json-payload]
+//	invoke <request-id> <capability-id> [target-agent-id] [json-payload]
+//	help | quit
 func runInteractive(ctx context.Context, c *agent.Client, in io.Reader, out, errOut io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var outputMu sync.Mutex
 	writeJSON := func(msg map[string]any) error {
 		outputMu.Lock()
@@ -149,7 +237,7 @@ func runInteractive(ctx context.Context, c *agent.Client, in io.Reader, out, err
 	go func() {
 		defer close(events)
 		for {
-			msg, err := c.ReadWithTimeout(time.Minute)
+			msg, err := c.ReadContext(ctx)
 			select {
 			case events <- readResult{msg: msg, err: err}:
 			case <-ctx.Done():
@@ -169,11 +257,16 @@ func runInteractive(ctx context.Context, c *agent.Client, in io.Reader, out, err
 	go func() {
 		scanner := bufio.NewScanner(in)
 		for scanner.Scan() {
-			lines <- scanner.Text()
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
 		}
 		close(lines)
 	}()
 
+	lineEvents := (<-chan string)(lines)
 	inputClosed := false
 	var drain *time.Timer
 	for {
@@ -206,11 +299,12 @@ func runInteractive(ctx context.Context, c *agent.Client, in io.Reader, out, err
 			if err := writeJSON(result.msg); err != nil {
 				return fmt.Errorf("write event: %w", err)
 			}
-		case line, ok := <-lines:
+		case line, ok := <-lineEvents:
 			if !ok {
 				// A pipe commonly ends immediately after a command. Give the
 				// Gateway a short window to broadcast that command before closing.
 				inputClosed = true
+				lineEvents = nil
 				if drain == nil {
 					drain = time.NewTimer(750 * time.Millisecond)
 				}

@@ -5,8 +5,26 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 ## 当前状态
 
 - **P0**：WebSocket 实时控制面、SQLite WAL + 进程内 EventBus、Agent Capability Registry、能力调用和本地/Relay 文件传输元数据。
-- **P1**：能力调用生命周期事件、Teach Session、Skill Package manifest、本地 Evaluator 状态和版本回滚元数据。
-- **P2**：Planner/Capability Resolver、Task DAG、重试换 Agent、公共 Blackboard、私有会话和 Provider Adapter 接口。真正的并发调度和结果编排仍在后续迭代。
+- **P1**：保留 Teach Session/Evaluator 元数据 API；新增真实声明式文本能力包的传递、评估、本地安装、离线复用与版本回滚。见 [能力学习](docs/capability-learning.md)。
+- **真实文本任务**：显式 worker 执行 `cap.text.uppercase`，调用 ID 贯穿执行与结果；持久去重，断线不自动重跑。见 [真实 Agent 任务](docs/agent-tasks.md)。
+- **P2**：保留规划元数据 API；新增 Agent 侧显式文本 DAG 并发调度、依赖结果编排、持久分配/状态与人工只读恢复。见 [任务编排](docs/task-orchestration.md)。不自动规划、换 Agent 或重试不确定任务。
+- **真实网络协作**：出站 WebSocket 流式文件 Relay（默认最多 256 MiB，可配置），以及两个 Gateway 间的 Leader/命名空间 flat 代理级联。见 [流式传输](docs/streaming-relay.md)、[网关级联](docs/cascade.md)。
+
+组合验收 `python3 tests/collaboration-smoke.py` 会启动两个独立 Gateway 进程、多个 worker/bridge/CLI 进程，验证能力传递、老师退出后复用、跨网关 DAG 与 32 MiB 文件完整性，并检查网关内存增长及超限拒绝。该自动化使用单机 TCP 回环，不冒充已完成两台物理机器的网络、TLS 和防火墙验收。
+
+## 一等能力：文本、Skill、MCP 与知识
+
+能力目录新增 `kind`、`callable` 和可审查的类型化描述。`GET /api/capabilities?kind=skill`（或 `mcp`、`knowledge`）可筛选。仅声明 ID 不代表已安装、被授权或可调用。
+
+- **Skill**：真实 `manifest.json` + `SKILL.md` + 文件 ZIP 包，可通过 Relay 传递。接收仅暂存，核对 SHA256 并本机批准后才激活；普通说明/素材包保持不可执行，显式 text-recipe adapter 才能在受限运行时执行。见 [Skill 包](docs/skill-bundles.md)。
+- **MCP**：传递的是无凭据的服务器/工具清单，接收后仍禁用。必须本机批准精确清单、调用方与可选房间，并在本机绑定凭据，才进行真实 HTTP MCP 调用。不会自动启动 stdio 进程、安装依赖或执行不受信代码。见 [MCP 能力](docs/mcp-capabilities.md)。
+- **知识、记忆、经验**：本机持久记录，默认私有；只把明确选择的记录分享给命名接收方。完整记录通过 Relay 文件传输，审阅后按摘要导入，保留来源和版本，导入不会自动再分享。远程搜索只返回有限标题/引用元数据，不返回正文。不是模型权重训练。见 [知识共享](docs/knowledge-sharing.md)。
+
+调用远端已有能力，不会把包、连接权限或知识自动装到调用方。`cmd/call` 提供显式 JSON 调用；worker 的 `-skill-bundles`、`-mcp-store`、`-knowledge-store` 只加载各自本机已批准状态。原 `-skills` / `cap.learned.text.*` 兼容保留，`cap.skill.*` 使用完整 Skill bundle provider。详见 [能力目录与调用](docs/capability-catalog.md)。
+
+现有 DAG 仍是受限文本输入/依赖汇总，可调用文本型 Skill；MCP 与知识的结构化调用通过 `cmd/call`，也可按明确路由跨 Gateway。级联下游授权的是 bridge 自己的调用身份，不自动继承上游调用者的权限。
+
+`python3 tests/providers-smoke.py` 验证 Skill/MCP/知识文件传递、审批、真实调用、私有信息边界、去重恢复及双网关代理。MCP 当前支持 Streamable HTTP 的 JSON 响应子集，不支持 SSE、stdio、资源/图片输出或完整 OAuth 流程。短小调用参数与文本结果会进入房间历史，不能用它传文件正文或秘密。
 
 ## 快速开始
 
@@ -14,7 +32,7 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 
 ```bash
 git clone https://github.com/jiejhong/GooseCab.git
-cd GooseCab/goosecab
+cd GooseCab
 go mod download
 mkdir -p .data
 GOOSECAB_DB="$PWD/.data/goosecab.db" go run ./cmd/server
@@ -33,7 +51,7 @@ curl -fsS http://127.0.0.1:8312/api/status
 
 ## 本地启动两个 Agent
 
-仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；客户端只打印/发送协议事件，不执行能力或接收文件字节。
+仓库包含一个开发 Agent 客户端，支持 `-mode read-only`（默认）和 `-mode interactive`。两种模式都会发送 `agent.hello`（以及 hello 中的 capability 列表）；这两种模式只打印/发送协议事件，不执行能力或接收文件字节。真实执行必须显式开启 `-mode worker` 并提供持久日志 `-state`；可选 `-skills` 加载本机已验证能力包，见 [运行安全文本任务](docs/agent-tasks.md)。
 
 先保持上面的 Gateway 运行，再开两个终端：
 
@@ -72,13 +90,14 @@ go run ./cmd/agent -mode interactive \
   -room demo -id agent-a -capabilities cap.echo
 ```
 
-`event` 的 payload 和 `invoke` 的 payload 必须是 JSON；`invoke` 的 target agent 可省略。
+`event` 的 payload 和 `invoke` 的 payload 必须是 JSON；旧元数据能力的 `invoke` target agent 可省略；`cap.text.uppercase` 必须指定目标。
 
 ## 配置
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `GOOSECAB_DB` | `goosecab.db` | SQLite 数据库路径。生产环境应使用持久化磁盘。 |
+| `GOOSECAB_RELAY_MAX_BYTES` | `268435456`（256 MiB） | 单文件上限，正整数字节且不高于默认值；例如 `33554432` 为 32 MiB。 |
 | `GOOSECAB_ADDR` | `:8312` | HTTP、观察页和 Agent WebSocket 共用的监听地址；也可用 `cmd/server -addr`。 |
 | `GOOSECAB_AGENT_TOKEN` | 空 | 非空时，所有 `/api` 接口（含状态、Registry、P1/P2、传输、历史及 HTML 导出）和 `/ws` 要求 `Authorization: Bearer <token>`。 |
 | `GOOSECAB_ALLOW_CROSS_ORIGIN` | `0` | 设为 `1` 才允许非同源浏览器 WebSocket；只应在反向代理已做来源限制时启用。 |
@@ -101,7 +120,7 @@ go run ./cmd/agent -url ws://127.0.0.1:8312/api/v1/agent/connect \
 
 - 未设置 token 时仍支持原来的本地开发调用；设置 token 后所有 API 请求都必须带 Bearer header，旧的无认证 HTTP 脚本需补充 header。`/` 观察页外壳与 `/healthz` 仍公开，服务详情需要认证。
 - `/ws` 是只读观察通道。发送事件必须改用 `/api/v1/agent/connect`，先发送非空 `agent_id` 的 `agent.hello`，连接的 `room_id` 必须非空。同一连接不能再次切换 Agent ID。
-- `event.publish` 未填 room/actor 时由服务器补齐；显式填写但与连接不一致时返回错误，不写库。`agent.hello`、`agent.welcome`、`capability.announce` 不能通过通用事件绕过专用处理。
+- `event.publish` 未填 room/actor 时由服务器补齐；显式填写但与连接不一致时返回错误，不写库。`agent.hello`、`agent.welcome`、`capability.announce` 以及 `capability.invoke/progress/result` 不能通过通用事件绕过专用处理。
 - 新自动事件 ID 是不透明 UUID，不再使用 `type-seq`。按房间原子分配 `seq`，保留旧 ID、已有记录和调用者显式 ID；客户端不要从 ID 推导类型或序号。
 - Registry 是全网关、进程内能力目录。hello 会登记 Agent，announce 合并能力，重连 hello 替换该 Agent 的能力集合（保留仍在集合内的能力详细信息）。断开不删除目录条目，重启后需重新注册；目录不代表在线状态。Agent ID 应在网关内唯一。
 - 共享 token 不是每个 Agent 的身份凭证或房间 ACL。持有 token 者仍可选择连接房间、首次声明 Agent ID，以及调用管理 API；不适合不互信的多租户部署。
@@ -130,12 +149,12 @@ go run ./cmd/agent -mode interactive \
 
 如果同机还要启动第二个 Gateway，必须使用不同的 `GOOSECAB_ADDR` 和 `GOOSECAB_DB`（例如 `:8313` 与 `.data/secondary.db`）。
 
-当前协议保留两种部署语义，先由 Agent/编排层实现，Gateway 不做隐式桥接：
+当前提供明确配置的 `cmd/cascade`，使用两个 Gateway 的出站 Agent 连接实现：
 
-- **cascade（Leader Agent）**：本地 Gateway 把一个 Leader Agent 作为代表连接到上游 Gateway。Leader 负责把允许的本地事件/能力按协议转发，并在上游 room 使用独立的 Agent ID；跨 Gateway 的认证、过滤和失败重试由 Leader 实现。
-- **flat/transparent**：本地 Agent 直接连接远程 Gateway，并使用与本地视图相同的 `room` ID。它在上游是普通 Agent，不创建第二套 room，也不要求 Gateway 互相连接。
+- **leader**：一个上游代表身份按能力路由到指定下游 worker。
+- **flat**：下游 worker 以 `bridge-id/worker-id` 的独立代理身份出现在上游，不伪造原 worker 身份，也不自动镜像目录。
 
-两种模式都继续使用现有 `agent.hello`、`event.publish`、`capability.invoke`、`capability.progress` 和 `capability.result` 帧；本版本不实现复杂的 Gateway-to-Gateway 桥接。
+直接连接远程 Gateway 的普通 Agent 仍适用于无需代理的平坦部署。真正字节流走独立 Relay，不进入级联事件。级联保留原请求关联、路由轨迹与持久去重，未知任务不自动重发。可运行配置、双进程验收和限制见 [网关级联](docs/cascade.md)。
 
 ## API 概览
 
@@ -148,7 +167,8 @@ go run ./cmd/agent -mode interactive \
 - `GET /api/events/export.html?room_id=<id>`：下载漂亮的自包含 HTML 聊天记录，离线可读、可打印。
 - `/ws?room_id=<id>`：只读原始观察 WebSocket，供自定义客户端使用；所有写入帧都会被拒绝。
 - `/api/v1/agent/connect?room_id=<id>`：Agent 出站控制面 WebSocket。
-- `POST /api/transfers`、`POST /api/transfers/{file_id}`：记录文件传输请求和状态。文件字节不会经过 Gateway。
+- `POST /api/transfers`、`POST /api/transfers/{file_id}`：旧传输元数据 API，不触发字节传输。
+- `POST /api/v1/relay`、`GET /api/v1/relay/connect`：创建短时传输凭证并配对出站数据流。Gateway 仅有界流式转发，绝不保存文件字节；接收 Agent 校验并本地落盘。
 
 ### P1
 
@@ -163,7 +183,7 @@ go run ./cmd/agent -mode interactive \
 - `GET /api/capability-resolve?q=`：从 Registry 查找候选 Agent。
 - `POST /api/blackboards`、`POST /api/private-sessions`：创建公共黑板和私有会话元数据。
 
-P1/P2 当前 API 主要记录元数据和事件，不会自动调度真实的 Agent 进程。请求体字段和事件帧示例见协议文档。
+P1/P2 HTTP API 仍主要记录元数据和事件，不会自动调度真实 Agent。真实任务/学习/级联由显式 CLI 启动，不应把 HTTP 元数据响应视为执行成功。请求体字段和事件帧示例见协议文档。
 
 ## 查看和导出交互记录
 
@@ -183,7 +203,10 @@ HTML 是脱敏阅读副本，不是原始备份：凭据字段、文件引用和
 gofmt -w ./cmd ./internal
 go vet ./...
 go test ./...
-node tests/observer.test.cjs # 可选本地 UI 行为检查（Node.js 18+）
+go test -race ./...
+node tests/observer.test.cjs # UI 行为检查（Node.js 18+）
+python3 tests/collaboration-smoke.py # 真实独立进程与 TCP 网络组合验收（Python 3）
+python3 tests/providers-smoke.py # Skill/MCP/知识的真实端到端与安全边界
 ```
 
-CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...` 、`go test ./...` 和无依赖的 Node UI 行为检查。
+CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 、无依赖的 Node UI 行为检查和 Python 独立进程网络组合验收。

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -21,7 +22,9 @@ const (
 	// wait for a sequence of events should use their own overall deadline and
 	// pass the remaining duration to ReadWithTimeout.
 	DefaultReadTimeout = 5 * time.Second
-	dialReadTimeout    = 2 * time.Second
+	// Room replay precedes welcome. Allow bounded large-history recovery under
+	// load; DialWithTokenContext still honors a caller's shorter deadline.
+	dialReadTimeout = 10 * time.Second
 )
 
 // Client is a minimal outbound Agent Node connection. It never exposes an
@@ -31,6 +34,7 @@ type Client struct {
 	AgentID string
 	RoomID  string
 
+	writeMu   sync.Mutex
 	pendingMu sync.Mutex
 	pending   []map[string]any
 }
@@ -39,17 +43,23 @@ type Client struct {
 // gateway may replay room events before processing the new hello, so those
 // frames are retained for the first Read call instead of being discarded.
 func Dial(url, room, id string, caps []string) (*Client, error) {
-	return dial(url, room, id, caps, "")
+	return dial(context.Background(), url, room, id, caps, "")
 }
 
 // DialWithToken is the authenticated variant of Dial. The token is sent only
 // as a Bearer Authorization header during the websocket handshake; it is not
 // included in protocol messages or persisted by the client.
 func DialWithToken(url, room, id string, caps []string, token string) (*Client, error) {
-	return dial(url, room, id, caps, token)
+	return dial(context.Background(), url, room, id, caps, token)
 }
 
-func dial(url, room, id string, caps []string, token string) (*Client, error) {
+// DialWithTokenContext applies cancellation to TCP/TLS/websocket handshake and
+// pre-welcome replay, not just to reads after a connection has been established.
+func DialWithTokenContext(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
+	return dial(ctx, url, room, id, caps, token)
+}
+
+func dial(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
 	endpoint, err := urlpkg(url, room)
 	if err != nil {
 		return nil, err
@@ -59,10 +69,15 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 		headers = make(http.Header)
 		headers.Set("Authorization", "Bearer "+token)
 	}
-	c, _, err := websocket.DefaultDialer.Dial(endpoint, headers)
+	c, response, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 	if err != nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 	x := &Client{Conn: c, AgentID: id, RoomID: room}
 	if err = x.Write(map[string]any{"type": "agent.hello", "agent_id": id, "capabilities": caps}); err != nil {
 		_ = c.Close()
@@ -70,6 +85,9 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 	}
 
 	deadline := time.Now().Add(dialReadTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
 	for {
 		if err = c.SetReadDeadline(deadline); err != nil {
 			_ = c.Close()
@@ -88,6 +106,10 @@ func dial(url, room, id string, caps []string, token string) (*Client, error) {
 	if err = c.SetReadDeadline(time.Time{}); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("clear agent welcome deadline: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		_ = c.Close()
+		return nil, err
 	}
 	return x, nil
 }
@@ -112,7 +134,35 @@ func urlpkg(raw, room string) (string, error) {
 	return u.String(), nil
 }
 
-func (c *Client) Write(v any) error { return c.Conn.WriteJSON(v) }
+func (c *Client) Write(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(DefaultReadTimeout)); err != nil {
+		return err
+	}
+	return c.Conn.WriteJSON(v)
+}
+
+// ReadContext is for long-lived readers. Cancellation closes the connection;
+// unlike a websocket timeout it cannot leave a reader spinning on a poisoned socket.
+func (c *Client) ReadContext(ctx context.Context) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if msg, ok := c.dequeue(); ok {
+		return msg, nil
+	}
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	var msg map[string]any
+	if err := c.Conn.ReadJSON(&msg); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("read agent event: %w", err)
+	}
+	return msg, nil
+}
 
 // SendChat publishes a room chat message through the event stream. Chat text
 // is metadata only; the gateway does not execute or interpret it.
@@ -134,10 +184,10 @@ func (c *Client) SendEvent(eventType string, payload any) error {
 	return c.Write(map[string]any{
 		"type": "event.publish",
 		"event": protocol.Event{
-			RoomID: c.RoomID,
-			Type:   eventType,
-			Actor:  protocol.Actor{Kind: "agent", ID: c.AgentID},
-			TS:     time.Now().UTC(),
+			RoomID:  c.RoomID,
+			Type:    eventType,
+			Actor:   protocol.Actor{Kind: "agent", ID: c.AgentID},
+			TS:      time.Now().UTC(),
 			Payload: payload,
 		},
 	})
@@ -213,8 +263,8 @@ func (c *Client) dequeue() (map[string]any, bool) {
 
 func (c *Client) Close() error { return c.Conn.Close() }
 
-// CopyLocal is the data-plane primitive used by direct or relay
-// implementations. The gateway sees only metadata.
+// CopyLocal is a legacy same-process filesystem helper, not a cross-machine
+// data plane. Real network transfers use internal/relay.
 func CopyLocal(src, dst string) (size int64, sha string, err error) {
 	in, err := os.Open(src)
 	if err != nil {
@@ -233,11 +283,22 @@ func CopyLocal(src, dst string) (size int64, sha string, err error) {
 	return n, hex.EncodeToString(h.Sum(nil)), err
 }
 
-// CopyWithMode validates the selected signaling path; bytes still stay local
-// to the Agents.
+// CopyWithMode is a legacy compatibility wrapper around CopyLocal. Its mode
+// argument does not create a network transfer; use internal/relay instead.
 func CopyWithMode(mode, src, dst string) (int64, string, error) {
 	if mode != "direct" && mode != "relay" {
 		return 0, "", fmt.Errorf("unsupported transfer mode: %s", mode)
 	}
 	return CopyLocal(src, dst)
+}
+
+// Persisted room events may legitimately use the type "error". Only the
+// unwrapped control frame is a protocol rejection, including during replay.
+func isProtocolError(msg map[string]any) bool {
+	_, hasEventID := msg["event_id"]
+	_, hasRoom := msg["room_id"]
+	_, hasSeq := msg["seq"]
+	_, hasActor := msg["actor"]
+	code, _ := msg["code"].(string)
+	return msg["type"] == "error" && code != "" && !hasEventID && !hasRoom && !hasSeq && !hasActor
 }

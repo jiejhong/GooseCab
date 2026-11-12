@@ -1,19 +1,27 @@
 package registry
 
 import (
+	"encoding/json"
+	"github.com/jiejhong/GooseCab/internal/protocol"
 	"sort"
+	"strings"
 	"sync"
 )
 
 type Capability struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Version      string `json:"version"`
-	InputSchema  any    `json:"input_schema,omitempty"`
-	OutputSchema any    `json:"output_schema,omitempty"`
-	Risk         string `json:"risk,omitempty"`
-	Manifest     any    `json:"manifest,omitempty"`
+	Kind         string                        `json:"kind"`
+	Callable     bool                          `json:"callable"`
+	Skill        *protocol.SkillDescriptor     `json:"skill,omitempty"`
+	MCP          *protocol.MCPDescriptor       `json:"mcp,omitempty"`
+	Knowledge    *protocol.KnowledgeDescriptor `json:"knowledge,omitempty"`
+	ID           string                        `json:"id"`
+	Name         string                        `json:"name"`
+	Description  string                        `json:"description"`
+	Version      string                        `json:"version"`
+	InputSchema  any                           `json:"input_schema,omitempty"`
+	OutputSchema any                           `json:"output_schema,omitempty"`
+	Risk         string                        `json:"risk,omitempty"`
+	Manifest     any                           `json:"manifest,omitempty"`
 }
 type Agent struct {
 	ID           string       `json:"id"`
@@ -27,8 +35,13 @@ type Registry struct {
 	agents map[string]Agent
 }
 
-func New() *Registry               { return &Registry{agents: map[string]Agent{}} }
-func clone(a Agent) Agent          { a.Capabilities = append([]Capability{}, a.Capabilities...); return a }
+func New() *Registry { return &Registry{agents: map[string]Agent{}} }
+func clone(a Agent) Agent {
+	raw, _ := json.Marshal(a)
+	var out Agent
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
 func (r *Registry) Upsert(a Agent) { r.mu.Lock(); defer r.mu.Unlock(); r.agents[a.ID] = clone(a) }
 func (r *Registry) Get(id string) (Agent, bool) {
 	r.mu.RLock()
@@ -89,6 +102,10 @@ func (r *Registry) RegisterHello(id, name, role string, ids []string) {
 		seen[id] = true
 		c := previous[id]
 		c.ID = id
+		if c.Kind == "" {
+			c.Kind = protocol.CapabilityKind(id)
+			c.Callable = c.Kind == protocol.CapabilityKindText && protocol.IsExecutableTextCapability(id)
+		}
 		a.Capabilities = append(a.Capabilities, c)
 	}
 	r.agents[a.ID] = a
@@ -103,20 +120,33 @@ func (r *Registry) Announce(id string, c Capability) {
 	a = clone(a)
 	for i, old := range a.Capabilities {
 		if old.ID == c.ID {
-			if c.Name != "" {
-				old.Name = c.Name
-			}
-			if c.Version != "" {
-				old.Version = c.Version
-			}
-			if c.Manifest != nil {
-				old.Manifest = c.Manifest
-			}
-			a.Capabilities[i] = old
+			a.Capabilities[i] = c
 			r.agents[id] = a
 			return
 		}
 	}
 	a.Capabilities = append(a.Capabilities, c)
 	r.agents[id] = a
+}
+
+// SearchCapabilities filters individual capabilities rather than returning unrelated entries.
+func (r *Registry) SearchCapabilities(q, kind string) []Agent {
+	out := []Agent{}
+	q = strings.ToLower(strings.TrimSpace(q))
+	for _, a := range r.List() {
+		caps := []Capability{}
+		for _, c := range a.Capabilities {
+			if (kind == "" || c.Kind == kind) && (q == "" || strings.Contains(strings.ToLower(c.ID+" "+c.Name+" "+c.Description), q)) {
+				caps = append(caps, c)
+			}
+		}
+		if len(caps) > 0 {
+			a.Capabilities = caps
+			out = append(out, a)
+		}
+	}
+	return out
+}
+func CapabilityFromAnnouncement(a protocol.CapabilityAnnounce) Capability {
+	return Capability{ID: a.CapabilityID, Name: a.Name, Version: a.Version, Description: a.Description, Kind: a.Kind, Callable: a.Callable, InputSchema: a.InputSchema, Skill: a.Skill, MCP: a.MCP, Knowledge: a.Knowledge}
 }

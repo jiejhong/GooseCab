@@ -59,6 +59,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	hasEventJSON := false
+	hasCorrelationID := false
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, columnType string
@@ -66,6 +67,9 @@ func migrate(db *sql.DB) error {
 		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			_ = rows.Close()
 			return err
+		}
+		if name == "correlation_id" {
+			hasCorrelationID = true
 		}
 		if name == "event_json" {
 			hasEventJSON = true
@@ -82,6 +86,17 @@ func migrate(db *sql.DB) error {
 		if _, err = tx.Exec(`ALTER TABLE events ADD COLUMN event_json TEXT`); err != nil {
 			return err
 		}
+	}
+	if !hasCorrelationID {
+		if _, err = tx.Exec(`ALTER TABLE events ADD COLUMN correlation_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`UPDATE events SET correlation_id=COALESCE(json_extract(event_json,'$.correlation_id'),'') WHERE json_valid(event_json)`); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_events_room_correlation_seq ON events(room_id,correlation_id,seq)`); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_events_room_seq ON events(room_id,seq)`); err != nil {
 		return err
@@ -150,8 +165,8 @@ func appendEvent(ctx context.Context, db eventExecer, e protocol.Event) error {
 	if err != nil {
 		return fmt.Errorf("encode event %q payload: %w", e.EventID, err)
 	}
-	_, err = db.ExecContext(ctx, `INSERT INTO events(event_id,room_id,seq,type,payload,created_at,event_json) VALUES(?,?,?,?,?,?,?)`,
-		e.EventID, e.RoomID, e.Seq, e.Type, string(payload), e.TS.UTC().Format(time.RFC3339Nano), string(snapshot))
+	_, err = db.ExecContext(ctx, `INSERT INTO events(event_id,room_id,seq,type,payload,created_at,event_json,correlation_id) VALUES(?,?,?,?,?,?,?,?)`,
+		e.EventID, e.RoomID, e.Seq, e.Type, string(payload), e.TS.UTC().Format(time.RFC3339Nano), string(snapshot), e.CorrelationID)
 	return err
 }
 
@@ -161,6 +176,11 @@ func (s *Store) EventsAfter(ctx context.Context, room string, after int64) ([]pr
 		return nil, err
 	}
 	defer rows.Close()
+	return readEvents(rows, room)
+}
+
+func readEvents(rows *sql.Rows, room string) ([]protocol.Event, error) {
+	var err error
 	var out []protocol.Event
 	for rows.Next() {
 		var id, typ, ts string
@@ -207,3 +227,24 @@ func (s *Store) NextSeq(ctx context.Context, room string) (int64, error) {
 }
 
 func (s *Store) String() string { return "sqlite store" }
+
+const MaxInvocationEvents = 2048
+
+// InvocationEvents uses the room/correlation index, not full room replay. It
+// bounds even pathological duplicate histories and fails closed at the limit.
+func (s *Store) InvocationEvents(ctx context.Context, room, id string) ([]protocol.Event, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT event_id,seq,type,payload,created_at,event_json FROM events
+ WHERE room_id=? AND correlation_id=? AND type IN ('capability.invoke','capability.progress','capability.result') ORDER BY seq LIMIT ?`, room, id, MaxInvocationEvents+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events, err := readEvents(rows, room)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > MaxInvocationEvents {
+		return nil, fmt.Errorf("invocation history exceeds safety limit")
+	}
+	return events, nil
+}
