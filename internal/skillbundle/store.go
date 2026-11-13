@@ -313,6 +313,15 @@ func (s *Store) Invoke(ctx context.Context, v protocol.CapabilityInvoke) protoco
 		r.Error = "Skill execution failed; inspect the local package"
 		return r
 	}
+	return invokeInspected(ctx, v, in)
+}
+
+func invokeInspected(ctx context.Context, v protocol.CapabilityInvoke, in Inspection) protocol.CapabilityResult {
+	r := protocol.CapabilityResult{RequestID: v.RequestID, Status: "failed"}
+	if ctx.Err() != nil {
+		r.Error = "Skill invocation canceled"
+		return r
+	}
 	if !in.Executable || in.CapabilityID != v.CapabilityID {
 		r.Error = "Skill is manual, not executable"
 		return r

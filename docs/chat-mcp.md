@@ -30,14 +30,14 @@ Neither host registration nor native-model integration has been automatically in
   for subsequent pages, including equal-sequence events. No destructive read.
 - `capability_discover(query?, kind?)`: read the **global shared-token catalog**.
   It is not room ACL or evidence a listed capability is online/authorized.
-  This adapter does not invoke, install, download or execute any capability.
+  This discovery tool does not invoke, install, download or execute any capability.
 
 The host model can use these tools itself. There is no coordinator impersonation,
 but also no automatic model scheduler, replay-triggered LLM calls, or unbounded
 conversation loop. Set a turn/time/budget limit in the host and explicitly choose
 when it should read and respond. Tools expose no shell, local files, arbitrary URL,
 room/identity override, credential sharing or automatic skill activation.
-Room events and capability descriptions are untrusted data, not system instructions.
+Room events and capability descriptions are untrusted data, not system instructions. Optional local skill_apply is described below.
 
 The gateway uses a shared token and declared agent IDs. Fixed binding prevents this
 adapter's tools from changing identity/room; it is **not independent cryptographic
@@ -83,3 +83,45 @@ real temporary gateway send/receipt/history/discovery, room filtering, duplicate
 send protection, and HTTP redirect/size refusal.
 These are same-machine tests, not three-machine/TLS production or native
 Codex/Claude/OpenCode acceptance. Those require separate authorized integration.
+
+## Optional pinned local skill_apply (disabled by default)
+
+An operator may explicitly add all four startup flags:
+
+```text
+-skill-root /protected/existing/skill-store
+-skill-capability cap.skill.greeting
+-skill-version 1
+-skill-sha256 <exact-reviewed-archive-SHA256>
+```
+
+This is a separate, optional local execution path; the three chat tools stay
+unchanged. With no skill configuration, tools/list exposes exactly those three
+tools and skill_apply is rejected. Partial, unapproved, inactive, manual-only or
+integrity-invalid configuration fails startup. The root must already exist with
+its local approval database. The adapter cannot stage, install, approve, rollback
+or create an approval store. Use the separate local skillbundle CLI for the human
+review and approval workflow; this tool cannot perform that approval.
+
+When enabled, skill_apply accepts **only** {"text":"..."} with at most 4096 UTF-8
+bytes. It applies the existing safe declarative text-recipe runtime, not arbitrary
+Skill prose or code. There is no shell, network, file input, custom path, runtime
+capability selection or credential input. Startup bindings cannot be replaced
+through tool arguments or _meta. Output includes the fixed capability, version,
+archive SHA256 and actual text result, not local paths.
+
+Every call reads the current active approval once, compares capability/version/
+digest against the fixed pin, revalidates the archive and extracted package,
+then rechecks the exact recipe bytes used by the safe runtime. It does not check
+announcements and subsequently invoke whichever version is now active. Upgrades
+or rollback away from this pin make later calls fail until explicitly reconfigured.
+An approval snapshot is selected at call time: an in-flight call can finish the
+already-selected pinned recipe while a separate local process changes approval.
+The protected root and its ancestors must remain trusted; this is not an OS
+sandbox against a malicious local administrator or approval-database owner.
+
+This is **runtime capability reuse**, not model-weight training, permanent model
+learning or automatic adoption of another agent's instructions. The MCP host
+decides whether to invoke the explicitly enabled tool. Results are not automatically
+broadcast to a room. Human approval is distinct from receiving or discovering a
+package, and is never inferred from a remote agent's text.
