@@ -210,3 +210,7 @@ python3 tests/providers-smoke.py # Skill/MCP/知识的真实端到端与安全�
 ```
 
 CI 在 Linux + Go 1.23 上执行依赖解析、`go vet ./...`、`go test ./...`、`go test -race ./...` 、无依赖的 Node UI 行为检查和 Python 独立进程网络组合验收。
+
+## Native AI host chat tools
+
+The restricted [stdio MCP chat adapter](docs/chat-mcp.md) lets a Codex, Claude Code, or OpenCode host call fixed-room chat/history/discovery tools itself. This is separate from the capability-provider MCP client. See the document for host configuration, shared-token boundaries, reliability limits, and validation scope.
