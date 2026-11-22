@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jiejhong/GooseCab/internal/agent/localtransport"
 	"github.com/jiejhong/GooseCab/internal/protocol"
 )
 
@@ -30,9 +31,10 @@ const (
 // Client is a minimal outbound Agent Node connection. It never exposes an
 // inbound port.
 type Client struct {
-	Conn    *websocket.Conn
-	AgentID string
-	RoomID  string
+	Conn      *websocket.Conn
+	AgentID   string
+	RoomID    string
+	localRoom bool
 
 	writeMu   sync.Mutex
 	pendingMu sync.Mutex
@@ -68,6 +70,27 @@ func DialWithToken(url, room, id string, caps []string, token string) (*Client, 
 // pre-welcome replay, not just to reads after a connection has been established.
 func DialWithTokenContext(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
 	return dial(ctx, url, room, id, caps, token)
+}
+
+// DialLocalRoomContext opts in to an independently authenticated loopback
+// room. It never forwards the local credential to a legacy Gateway or proxy.
+func DialLocalRoomContext(ctx context.Context, raw, room, id, token string) (*Client, error) {
+	conn, err := localtransport.Dial(ctx, raw, room, id, token)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{Conn: conn, RoomID: room, AgentID: id, localRoom: true}, nil
+}
+
+func (c *Client) LocalRoom() bool { return c.localRoom }
+
+// AcknowledgeLocalMention explicitly confirms a successfully processed
+// event and the delivery proof emitted on this same isolated connection.
+func (c *Client) AcknowledgeLocalMention(eventID, deliveryID string) error {
+	if !c.localRoom || eventID == "" || len(eventID) > 128 || len(deliveryID) != 32 {
+		return fmt.Errorf("local acknowledgement requires an event ID and its delivery ID")
+	}
+	return c.Write(map[string]string{"type": "mention.ack", "event_id": eventID, "delivery_id": deliveryID})
 }
 
 func dial(ctx context.Context, url, room, id string, caps []string, token string) (*Client, error) {
