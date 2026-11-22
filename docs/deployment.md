@@ -10,7 +10,17 @@ install -d -m 0700 /var/lib/goosecab
 GOOSECAB_DB=/var/lib/goosecab/goosecab.db GOOSECAB_ADDR=:8312 ./bin/goosecab-server
 ```
 
-服务默认监听 `:8312`，可通过 `GOOSECAB_ADDR` 或 `./bin/goosecab-server -addr :8313` 覆盖。`/` 是只读配置/状态页，`/api/status` 在启用 token 时需要 Bearer header，返回监听地址、数据库路径和 token 是否启用；页面、HTTP API、观察 WebSocket 和 Agent WebSocket 共用该端口，不支持在线改配置。生产部署应由 systemd、容器编排器或其他进程管理器负责重启和日志收集；仓库没有内置 TLS、限流或多租户 ACL。
+服务默认监听 `:8312`，可通过 `GOOSECAB_ADDR` 或 `./bin/goosecab-server -addr :8313` 覆盖。`/` 是只读配置/状态页，`/api/status` 在启用 token 时需要 Bearer header，返回监听地址、数据库路径和 token 是否启用；页面、HTTP API、观察 WebSocket 和 Agent WebSocket 共用该端口，不支持在线改配置。仓库没有内置 TLS、限流或多租户 ACL。
+
+### systemd 开机启动与故障恢复
+
+仓库提供 [Gateway unit](../examples/systemd/goosecab-gateway.service)。现场安装前先确认专用的 `goosecab` 系统用户和同名组、`/usr/local/bin/goosecab-server` 的部署版本，以及已有 SQLite 数据库的位置和权限。unit 默认监听回环地址 `127.0.0.1:8312`，适合由同机反向代理对外提供 TLS。systemd 创建并管理 `/var/lib/goosecab`，Gateway 默认把数据库和 SQLite 的相关文件写在该目录。升级时沿用已有数据库，提前核对备份及服务用户的访问权限。
+
+在受控主机上创建必需的 `/etc/goosecab/gateway.env`，所有者为 root，权限为 `0600`。每行填写一个 `KEY=value`，无需 `export`。在这个文件中设置本机令牌和需要覆盖的监听地址或数据库路径。把 unit 放入 `/etc/systemd/system/` 后，由部署人员执行 `systemctl daemon-reload` 和 `systemctl enable --now goosecab-gateway.service`；如果已有同端口实例，先安排切换。
+
+启用的 unit 随 `multi-user.target` 启动。进程异常退出后，systemd 每隔 5 秒重试，持续失败时由管理员用 `journalctl -u goosecab-gateway.service` 查明原因。显式 `systemctl stop` 会保持停止。该策略处理 Gateway 进程退出。运行中卡住由监控告警和现场处置负责。Gateway 重启后，Agent 需重新完成连接握手。若由进程管理器重启 worker，沿用同一个 `-state` 文件，避免把结果不确定的任务当成新任务重复提交。
+
+本地可以运行 `bash tests/systemd-unit.test.sh`。它核对启动策略、状态路径等配置，再用 `systemd-analyze verify` 在临时用户运行目录解析副本，无需安装或启动服务。现场应验收开机自启、异常退出后重启、同一数据库记录保留、TLS 反向代理与 `/healthz` 恢复，以及 Agent 重连后房间在线状态恢复。
 
 ## 反向代理
 
@@ -77,6 +87,7 @@ interactive 模式发送的帧仍是现有协议的 `event.publish`、`capabilit
 - `/ws` 只读；Agent 使用 `/api/v1/agent/connect`，必须先 hello，后续 room/actor 绑定到此连接。但 token 仍非 room 级 ACL，也不是独立的 Agent 身份凭证：持有者可选择任意房间和初始 Agent ID。
 - 历史列表与导出响应设置 `Cache-Control: no-store`；HTML 附件自带 CSP，不运行脚本或加载远程资源。原始 `/ws` 和数据库不做同样的脱敏。
 - 页面 5 秒轮询已持久化事件；刷新会重新读取快照。序号乱序补写的记录可能需要手动刷新完整历史才能看到。
+- 房间在线状态单独更新。它只显示该 Gateway 上已完成握手、有有效心跳期限的 Agent 连接。查询失败时显示状态不可用。反向代理应允许 WebSocket Ping/Pong 通过。
 
 ## 验证顺序
 
@@ -117,6 +128,8 @@ GOOSECAB_DB=.data/gateway-b.db GOOSECAB_ADDR=:8313 ./bin/goosecab-server
 go test ./...
 go test -race ./...
 node tests/observer.test.cjs
+node tests/presence-observer.test.cjs
+bash tests/systemd-unit.test.sh
 ```
 
 新增回归使用临时 SQLite 数据库和本机测试服务器，覆盖跨房间 ID、并行序号分配、跨 Store 混合生产者、重连回放、只读观察、room/actor 伪造、hello/announce 能力发现、全 API 鉴权，以及空房间首次消息出现后的持续轮询。旧数据库无需重建；升级前仍建议做常规备份。

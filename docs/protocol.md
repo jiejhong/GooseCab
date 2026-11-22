@@ -93,6 +93,19 @@ hello 与 announce 更新 HTTP `/api/agents`、`/api/capabilities` 和 P2 `/api/
 
 这仍是共享 token、全网关目录，不提供初始 Agent ID 的独立认证或房间级权限。连接绑定防止在同一会话中伪造 envelope，但持有共享 token 者仍可在新连接声明其他 Agent ID。能力执行、结果归属授权和多租户隔离不在本次修复范围。
 
+### 房间在线状态
+
+`GET /api/rooms/presence?room_id=demo` 返回本 Gateway 的房间连接快照，沿用 API 的 Bearer 鉴权，响应使用 `Cache-Control: no-store`。响应示例为 `{"room_id":"demo","agents":[{"agent_id":"agent-a","connections":2}]}`。空房间的 `agents` 字段为空数组。同一房间内相同 Agent ID 的多条健康连接合计为一个 Agent。不同房间分别统计。观察 WebSocket、未完成 hello 的连接及仅存在于 Registry 或历史记录中的 Agent 均不计入。
+
+Gateway 发出 welcome 后计入连接，每 20 秒发送 WebSocket Ping，收到 Pong 后延长 60 秒期限。连接关闭或超过心跳期限便从在线快照移除。自定义 Agent 客户端需要持续读取 WebSocket 以处理控制帧。短时重连的新旧连接可能短暂并存，旧连接清理只移除旧连接。在线状态保存在进程内，Gateway 重启后随 Agent 重新握手恢复。它只反映连接活性，无法确认某项能力可执行。
+
+每个 `agents[]` 条目的 `last_activity_at` 使用 Gateway 处理成功后的 UTC 时间。它只记录绑定到该连接身份的非空聊天、通过校验的能力调用、进度和结果，以及成功写入的传输事件。握手、能力注册、Ping/Pong、失败操作和其他自定义事件不计入。该字段以本房间的 Agent ID 合并多条连接，取最近一次已确认活动。旧连接退场时只要还有其他连接，时间就会保留。最后一条连接清理或 Gateway 重启后重新计时。没有已确认活动时返回 `null`，页面显示「暂无活动」。
+
+同一响应的 `last_activity_at` 是本房间最近一次可确认时间的发言，使用 UTC 时间。它读取该房间已持久化的 `chat.message` 或旧版 `chat`，按房间序号及写入行顺序选取最近一条含非空文本的记录。零值、无效或未来的时间戳会跳过。心跳、握手和能力事件不更新发言时间。房间无人在线时仍可显示历史发言时间。
+
+`activity_available: true` 且 `last_activity_at: null` 表示查询成功，未找到符合条件的发言。查询超时或失败时返回 `activity_available: false` 和 `null`，在线连接快照仍可返回。观察页用浏览器本地时间显示发言时间。此查询沿用房间在线接口的认证和房间范围。
+
+
 ## 文件传输元数据
 
 文件传输的控制面只传元数据，文件字节由 Agent 之间的 direct 或 relay 数据面实现：

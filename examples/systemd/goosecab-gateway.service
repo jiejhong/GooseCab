@@ -1,0 +1,23 @@
+[Unit]
+Description=GooseCab Gateway
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=goosecab
+Group=goosecab
+StateDirectory=goosecab
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/goosecab
+Environment=GOOSECAB_DB=/var/lib/goosecab/goosecab.db
+Environment=GOOSECAB_ADDR=127.0.0.1:8312
+EnvironmentFile=/etc/goosecab/gateway.env
+ExecStart=/usr/local/bin/goosecab-server
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
