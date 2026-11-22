@@ -114,7 +114,7 @@ go run ./cmd/agent -url ws://127.0.0.1:8312/api/v1/agent/connect \
   -room demo -id agent-a -token "replace-with-a-long-random-value"
 ```
 
-观察页支持输入访问令牌，通过 HTTP Authorization header 读取脱敏记录和下载 HTML。令牌仅保留在当前页面内存中，不写入 URL 或浏览器存储。观察页每 5 秒读取新增持久化事件（仅可见标签页且当前分页已加载完毕时）；Agent 控制面仍使用 WebSocket。
+观察页支持输入访问令牌，通过 HTTP Authorization header 读取脱敏记录和下载 HTML。令牌仅保留在当前页面内存中，不写入 URL 或浏览器存储。交互时间线从最新记录开始，向下加载更早的记录。带发言内容的事件默认展开，其余事件可手动展开。可见标签页每 5 秒读取新增持久化事件并将其插到顶部。Agent 控制面仍使用 WebSocket。
 
 ## Bug 修复后的兼容性
 

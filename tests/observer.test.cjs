@@ -12,7 +12,8 @@ class Node {
     this.value = '';
     this.textContent = '';
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) { this.children.push(...nodes.flatMap(node => node.tagName === 'fragment' ? node.children : [node])); }
+  prepend(...nodes) { this.children.unshift(...nodes.flatMap(node => node.tagName === 'fragment' ? node.children : [node])); }
   replaceChildren(...nodes) { this.children = nodes; }
   get childNodes() { return this.children; }
   setAttribute(key, value) { this[key] = value; }
@@ -45,13 +46,14 @@ const context = {
       const arrived = ++emptyReads > 2;
       return {ok:true,json:async()=>({room_id:'empty',redacted:true,snapshot_seq:arrived?1:0,snapshot_cursor:arrived?'1':'0',total:arrived?1:0,has_more:false,next_seq:arrived?1:0,next_cursor:arrived?'1':'',events:arrived?[{room_id:'empty',seq:1,type:'chat.message',payload:{text:'first arrival'}}]:[]})};
     }
-    const seq = Number(query.get('after_seq') || 0) + 1;
+    const older = query.has('before_seq');
+    const seq = query.get('order') === 'desc' ? (older ? 1 : 2) : 3;
     return {
       ok: true,
       json: async () => ({
         room_id: '[已隐藏]', redacted: true,
         snapshot_seq: seq > 2 ? 3 : 2, snapshot_cursor: seq > 2 ? '3' : '2',
-        total: seq > 2 ? 3 : 2, has_more: seq === 1,
+        total: seq > 2 ? 3 : 2, has_more: seq === 2,
         next_seq: seq, next_cursor: String(seq),
         events: [{
           // Distinct original IDs may redact identically; none may disappear.
@@ -69,21 +71,30 @@ const source = fs.readFileSync(path.join(__dirname, '../internal/gateway/web/ind
 vm.runInContext(source, context);
 const wait = () => new Promise(resolve => setImmediate(resolve));
 const all = node => [node, ...node.children.flatMap(all)];
+const cards = () => nodes.events.children.filter(node => node.tagName === 'article');
+const timeline = () => cards().map(card => all(card).find(node => node.className === 'badge').textContent);
+const detailsOf = card => all(card).find(node => node.tagName === 'details' && node.className.startsWith('bubble'));
 
 (async () => {
   await wait();
   assert.equal(nodes.shown.textContent, '1');
+  assert.deepEqual(timeline(), ['#2']);
+  assert(requests.at(-1).url.includes('order=desc'));
+  assert(vm.runInContext('pollEnabled && pollTimer === 1', context));
   assert(all(nodes.events).some(node => node.textContent === '<img onerror=evil>'));
   assert(!all(nodes.events).some(node => node.tagName === 'img'));
   assert(!all(nodes.config).some(node => String(node.textContent).includes('/secret')));
   await vm.runInContext('load()', context);
   assert.equal(nodes.shown.textContent, '2');
+  assert.deepEqual(timeline(), ['#2', '#1']);
   assert(requests.at(-1).url.includes('through_cursor=2'));
+  assert(requests.at(-1).url.includes('before_cursor=2'));
   assert(vm.runInContext('pollEnabled && pollTimer === 1', context));
   await vm.runInContext('load(false, true)', context);
   assert(!requests.at(-1).url.includes('through_seq'));
   assert(!requests.at(-1).url.includes('through_cursor'));
   assert.equal(nodes.shown.textContent, '3');
+  assert.deepEqual(timeline(), ['#3', '#2', '#1']);
   assert(requests.some(request => request.url.includes('after_cursor=2')));
 
   nodes.room.value = 'new';
@@ -175,7 +186,7 @@ const all = node => [node, ...node.children.flatMap(all)];
   assert.equal(vm.runInContext('tasks.size', context), beforeRedacted + 2);
   assert(cardText().includes('关联 ID 已隐藏或缺失'));
   vm.runInContext('hasMore=true; renderTasks()', context);
-  assert(nodes['task-summary'].textContent.includes('可能不是最新状态'));
+  assert(nodes['task-summary'].textContent.includes('可能缺少更早的调用记录'));
 
   // Poll failure preserves confirmed output, but leaves active tasks unconfirmed.
   emit({type:'capability.invoke',seq:19,payload:{request_id:'active',capability_id:'cap.echo'}});
@@ -196,28 +207,66 @@ const all = node => [node, ...node.children.flatMap(all)];
   assert(!cardText().includes('worker-a'));
   assert(!cardText().includes('<img onerror=evil>'));
 
-  // A full HTTP page-to-poll lifecycle updates the same card and safe local anchors.
-  let taskReads = 0;
+  // Latest page, live insert, and older page all go through the observer's fetch path.
+  const event = (seq, type, payload, actor) => ({room_id:'task-room',seq,type,payload,actor});
+  const firstPage = [
+    event(6,'chat.message',{text:'latest chat'},{kind:'user',id:'reader'}),
+    event(5,'capability.result',{request_id:'web-task',status:'completed',result_available:true,output:{text:'WEB RESULT'}}),
+    event(4,'agent.hello',{agent_id:'web-agent'}),
+    event(3,'chat.message',{text:' \t ',message:'',content:null})
+  ];
+  const olderPage = [
+    event(2,'chat','legacy chat'),
+    event(1,'capability.invoke',{request_id:'web-task',capability_id:'cap.text.uppercase',target_agent_id:'web-agent',payload:{text:'web input'}})
+  ];
+  const livePage = [event(7,'capability.progress',{request_id:'web-task',percent:50}),event(8,'note',{message:'live text'})];
+  const queries = [];
   context.fetch = async url => {
     if (url === '/api/status') return {ok:true,json:async()=>({service:'ok'})};
-    const result = ++taskReads > 1;
-    const event = {room_id:'task-room',seq:result?2:1,type:result?'capability.result':'capability.invoke',payload:result?{request_id:'web-task',status:'completed',result_available:true,output:{text:'WEB RESULT'}}:{request_id:'web-task',capability_id:'cap.text.uppercase',target_agent_id:'web-agent',payload:{text:'web input'}}};
-    return {ok:true,json:async()=>({room_id:'task-room',redacted:true,snapshot_seq:event.seq,snapshot_cursor:String(event.seq),total:event.seq,has_more:false,next_seq:event.seq,next_cursor:String(event.seq),events:[event]})};
+    const query = new URL(url, 'http://test').searchParams;
+    queries.push(query);
+    const poll = query.has('after_seq'), older = query.has('before_seq');
+    const events = poll ? livePage : older ? olderPage : firstPage;
+    const next = events.at(-1).seq, snapshot = poll ? 8 : 6;
+    return {ok:true,json:async()=>({room_id:'task-room',redacted:true,snapshot_seq:snapshot,snapshot_cursor:String(snapshot),total:snapshot,has_more:!older&&!poll,next_seq:next,next_cursor:String(next),events})};
   };
   nodes.room.value = 'task-room';
   await vm.runInContext('load(true)', context);
+  assert.deepEqual(timeline(), ['#6', '#5', '#4', '#3']);
+  assert.deepEqual(cards().map(card => detailsOf(card).open), [true, false, false, false]);
+  const helloDetails = detailsOf(cards()[2]);
+  assert.equal(helloDetails.children[0].tagName, 'summary');
+  helloDetails.open = true;
   assert.equal(nodes['task-count'].textContent,'1 个调用');
-  assert(cardText().includes('等待 Agent 接收'));
+  assert(cardText().includes('未找到关联的调用起点'));
+  const expanded = all(nodes.tasks).find(node => node.className === 'task-result');
+  expanded.open = true;
+  expanded.listeners.toggle();
   await vm.runInContext('load(false, true)', context);
-  assert.equal(nodes['task-count'].textContent,'1 个调用');
+  assert.equal(queries.at(-1).get('after_seq'),'6');
+  assert.equal(queries.at(-1).get('after_cursor'),'6');
+  assert.deepEqual(timeline(), ['#8', '#7', '#6', '#5', '#4', '#3']);
+  assert.deepEqual(cards().slice(0,2).map(card => detailsOf(card).open), [true, false]);
+  assert.equal(detailsOf(cards()[4]), helloDetails);
+  assert(helloDetails.open);
+  await vm.runInContext('load()', context);
+  assert.equal(queries.at(-1).get('before_seq'),'3');
+  assert.equal(queries.at(-1).get('through_cursor'),'6');
+  assert.deepEqual(timeline(), ['#8', '#7', '#6', '#5', '#4', '#3', '#2', '#1']);
+  assert(detailsOf(cards()[6]).open);
+  assert(!detailsOf(cards()[7]).open);
+  assert.equal(nodes.total.textContent, '8');
   assert(cardText().includes('WEB RESULT'));
-  assert(all(nodes.tasks).some(node=>node.tagName==='a'&&node.href==='#event-2'));
-  assert(all(nodes.events).some(node=>node.id==='event-2'));
+  assert(cardText().includes('web input'));
+  assert(!cardText().includes('未找到关联的调用起点'));
+  assert(all(nodes.tasks).find(node => node.className === 'task-result' && node.open));
+  const resultCard = cards()[3];
+  assert(all(nodes.tasks).some(node=>node.tagName==='a'&&node.href==='#'+resultCard.id));
   context.fetch = normalFetch;
 
   nodes.room.value = '中'.repeat(86);
   await vm.runInContext('load(true)', context);
   assert(nodes.state.textContent.includes('256'));
   assert.equal(vm.runInContext('pollEnabled', context), false);
-  console.log('PASS: safe text, status whitelist, sanitized IDs, snapshot paging, empty-room arrival, polling, authenticated status, room reset, UTF-8 limit, task lifecycle, result availability, safe output, duplicate events, redacted IDs, disconnected state');
+  console.log('PASS: latest-first timeline, event disclosure defaults, live inserts, older snapshot paging, empty-room arrival, authentication, safe text and IDs, room reset, UTF-8 limit, task lifecycle and result availability, disconnected state');
 })().catch(error => { console.error(error); process.exitCode = 1; });
