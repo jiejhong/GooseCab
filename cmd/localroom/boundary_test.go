@@ -222,7 +222,10 @@ func TestWebSocketReplayAndIdleExpiry(t *testing.T) {
 }
 
 func TestV2UserAuthorKeepsExistingUnreadReceipts(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, dbFile)
 	event := fixtureEvent()
 	event.Actor.Kind = "user"
