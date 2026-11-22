@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GooseCab 本地房间</title>
+  <link rel="stylesheet" href="/observer.css">
+  <script defer src="/observer.js"></script>
+</head>
+<body>
+  <main>
+    <h1 id="heading">GooseCab 本地房间</h1>
+    <form id="sign-in">
+      <label for="access-token">房间访问令牌</label>
+      <div class="controls">
+        <input id="access-token" type="password" required autocomplete="off" spellcheck="false">
+        <button type="submit">进入房间</button>
+      </div>
+    </form>
+    <button id="sign-out" type="button" hidden>退出房间</button>
+    <p id="room-status" role="status"></p>
+    <form id="compose" hidden>
+      <fieldset id="write-fields" disabled>
+        <label for="message">发言</label>
+        <textarea id="message" rows="3" maxlength="4096" required></textarea>
+        <div class="controls">
+          <label for="mention-kind">点名对象类型</label>
+          <select id="mention-kind"><option value="agent">Agent</option><option value="user">人类</option></select>
+        </div>
+        <label for="mention-id">点名对象 ID（可留空）</label>
+        <input id="mention-id" maxlength="256" autocomplete="off" spellcheck="false">
+        <div id="broadcast-controls" hidden></div>
+        <button type="submit">发送</button>
+      </fieldset>
+      <p id="send-status" role="status"></p>
+    </form>
+    <section id="mentions" aria-labelledby="mentions-title" hidden>
+      <h2 id="mentions-title">未读点名</h2>
+      <p id="mention-count" role="status"></p>
+      <div class="controls">
+        <button id="mention-first" type="button" disabled>回到最新</button>
+        <button id="mention-next" type="button" disabled>查看更早</button>
+        <button id="mention-ack" type="button" disabled>标记本页已读</button>
+      </div>
+      <p id="mention-status" role="status"></p>
+      <ol id="mention-events" aria-label="本页未读点名"></ol>
+    </section>
+    <section id="history" aria-labelledby="history-title" hidden>
+      <h2 id="history-title">发言历史</h2>
+      <div class="controls">
+        <button id="history-first" type="button" disabled>返回最新发言</button>
+        <button id="history-next" type="button" disabled>查看更早发言</button>
+      </div>
+      <p id="history-status" role="status"></p>
+      <ol id="events" aria-label="发言历史"></ol>
+    </section>
+  </main>
+</body>
+</html>

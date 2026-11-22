@@ -47,6 +47,7 @@ type options struct {
 	skillBundles   string
 	mcpStore       string
 	knowledgeStore string
+	localRoom      bool
 }
 
 func main() {
@@ -62,6 +63,7 @@ func main() {
 	flag.StringVar(&opts.skillBundles, "skill-bundles", "", "local reviewed Skill bundle store (worker mode; no implicit approval)")
 	flag.StringVar(&opts.mcpStore, "mcp-store", "", "local approved MCP manifest store (worker mode; credentials stay local)")
 	flag.StringVar(&opts.knowledgeStore, "knowledge-store", "", "local knowledge store owned by -id (worker mode; only explicit shares exposed)")
+	flag.BoolVar(&opts.localRoom, "local-room", false, "use the explicitly enabled loopback room transport")
 	flag.Parse()
 
 	if strings.TrimSpace(opts.id) == "" {
@@ -71,8 +73,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if opts.localRoom && (mode == modeWorker || opts.capabilities != "") {
+		log.Fatal("local room accepts chat and explicit acknowledgement only")
+	}
 	if opts.token == "" {
-		opts.token = os.Getenv("GOOSECAB_AGENT_TOKEN")
+		tokenEnv := "GOOSECAB_AGENT_TOKEN"
+		if opts.localRoom {
+			tokenEnv = "GOOSECAB_LOCALROOM_AGENT_TOKEN"
+		}
+		opts.token = os.Getenv(tokenEnv)
 	}
 
 	var executor *agent.Executor
@@ -136,7 +145,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	c, err := agent.DialWithToken(opts.url, opts.room, opts.id, caps, opts.token)
+	var c *agent.Client
+	if opts.localRoom {
+		dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		c, err = agent.DialLocalRoomContext(dialCtx, opts.url, opts.room, opts.id, opts.token)
+		cancel()
+	} else {
+		c, err = agent.DialWithToken(opts.url, opts.room, opts.id, caps, opts.token)
+	}
 	if err != nil {
 		log.Fatalf("connect agent %q: %v", opts.id, err)
 	}
@@ -339,9 +355,17 @@ func handleCommand(c *agent.Client, line string, writeJSON func(map[string]any) 
 	command, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
 	switch strings.ToLower(command) {
 	case "help", "?":
-		return false, writeJSON(map[string]any{"type": "client.help", "commands": []string{
-			"chat <text>", "event <event-type> [json-payload]", "invoke <request-id> <capability-id> [target-agent-id] [json-payload]", "help", "quit",
-		}})
+		commands := []string{"chat <text>", "event <event-type> [json-payload]", "invoke <request-id> <capability-id> [target-agent-id] [json-payload]", "help", "quit"}
+		if c.LocalRoom() {
+			commands = []string{"chat <text>", "ack <event-id> <delivery-id>", "help", "quit"}
+		}
+		return false, writeJSON(map[string]any{"type": "client.help", "commands": commands})
+	case "ack":
+		ids := strings.Fields(rest)
+		if len(ids) != 2 {
+			return false, fmt.Errorf("usage: ack <event-id> <delivery-id>")
+		}
+		return false, c.AcknowledgeLocalMention(ids[0], ids[1])
 	case "quit", "exit":
 		return true, c.Close()
 	case "chat":

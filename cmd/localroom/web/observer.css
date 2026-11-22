@@ -1,0 +1,20 @@
+:root { color-scheme: dark; font: 1rem/1.5 system-ui, sans-serif; background: #141820; color: #eef1f7; }
+body { margin: 0; padding: 1.25rem; }
+main { max-width: 46rem; margin: 1rem auto; }
+h1 { font-size: 1.5rem; overflow-wrap: anywhere; }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+label { display: block; }
+input, textarea, select, button { box-sizing: border-box; font: inherit; padding: .45rem .6rem; border: 1px solid #637084; border-radius: .35rem; }
+input, textarea, select { background: #151a24; color: inherit; }
+input, textarea { width: 100%; }
+#access-token { flex: 1 1 14rem; }
+button { background: #b7dcfb; color: #14263a; }
+button:disabled { opacity: .55; }
+fieldset, li { margin: .6rem 0; border: 1px solid #3c4758; border-radius: .5rem; padding: .75rem; background: #1c2430; }
+fieldset > * + * { margin-top: .5rem; }
+ol { list-style: none; padding: 0; }
+li p { margin: .3rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+li div { color: #c8d6e7; overflow-wrap: anywhere; }
+h2 { font-size: 1.15rem; }
+#mentions { margin-top: 1.25rem; padding-top: .6rem; border-top: 1px solid #3c4758; }
+#broadcast { width: auto; }
