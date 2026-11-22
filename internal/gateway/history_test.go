@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,72 @@ func TestHistoryPaginationSnapshotTieCursorAndValidation(t *testing.T) {
 	w = historyRequest(h, "/api/events/export.html?room_id=empty", "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "还没有记录") {
 		t.Fatal("empty export failed")
+	}
+}
+
+func TestHistoryNewestPageOlderSnapshotAndLiveCursor(t *testing.T) {
+	s, h := historyFixture(t)
+	seed := func(id string, seq int64) {
+		t.Helper()
+		appendHistory(t, s, historyEvent("demo", id, seq, "chat.message", id))
+	}
+	seed("oldest", 1)
+	seed("tie-a", 4)
+	seed("tie-b", 4)
+	seed("latest", 7)
+	appendHistory(t, s, historyEvent("other", "other-room", 8, "chat.message", "other"))
+	type historyPage struct {
+		Next           int64            `json:"next_seq"`
+		Cursor         string           `json:"next_cursor"`
+		Snapshot       int64            `json:"snapshot_seq"`
+		SnapshotCursor string           `json:"snapshot_cursor"`
+		Total          int              `json:"total"`
+		More           bool             `json:"has_more"`
+		Events         []protocol.Event `json:"events"`
+	}
+	read := func(path string, wantIDs ...string) historyPage {
+		t.Helper()
+		w := historyRequest(h, path, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		var page historyPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, event := range page.Events {
+			ids = append(ids, event.EventID)
+		}
+		if !slices.Equal(ids, wantIDs) {
+			t.Fatalf("%s: got %v, want %v", path, ids, wantIDs)
+		}
+		return page
+	}
+	first := read("/api/events?room_id=demo&order=desc&limit=2", "latest", "tie-b")
+	if !first.More || first.Snapshot != 7 || first.Total != 4 {
+		t.Fatalf("unexpected newest snapshot: %+v", first)
+	}
+	seed("late-older-tie", 4)
+	seed("live-at-snapshot-seq", 7)
+	seed("live-new-seq", 9)
+	older := read(fmt.Sprintf("/api/events?room_id=demo&order=desc&limit=2&before_seq=%d&before_cursor=%s&through_seq=%d&through_cursor=%s", first.Next, first.Cursor, first.Snapshot, first.SnapshotCursor), "tie-a", "oldest")
+	if older.More || older.Total != first.Total {
+		t.Fatalf("older page changed snapshot: %+v", older)
+	}
+	read(fmt.Sprintf("/api/events?room_id=demo&after_seq=%d&after_cursor=%s", first.Snapshot, first.SnapshotCursor), "live-at-snapshot-seq", "live-new-seq")
+	read("/api/events?room_id=demo&order=desc&before_seq=4", "oldest")
+	for _, path := range []string{
+		"/api/events?room_id=demo&order=unknown",
+		"/api/events?room_id=demo&order=desc&after_seq=1",
+		"/api/events?room_id=demo&order=desc&before_cursor=1",
+		"/api/events?room_id=demo&order=desc&before_seq=4&before_cursor=0",
+		"/api/events?room_id=demo&before_seq=4",
+		"/api/events/export.html?room_id=demo&order=desc",
+	} {
+		if w := historyRequest(h, path, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d", path, w.Code)
+		}
 	}
 }
 

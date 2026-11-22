@@ -27,15 +27,25 @@ type HistoryPage struct {
 // A nil through captures the room's current high-water mark. Callers can retain
 // both boundaries across pages; later appends above it are excluded.
 func (s *Store) History(ctx context.Context, room string, after int64, afterCursor string, through *int64, throughCursor *int64, limit int) (HistoryPage, error) {
+	return s.history(ctx, room, &after, afterCursor, through, throughCursor, limit, false)
+}
+
+// HistoryNewest reads the same snapshot from newest to oldest. A nil before
+// starts at the newest record; otherwise the sequence and cursor bound the page.
+func (s *Store) HistoryNewest(ctx context.Context, room string, before *int64, beforeCursor string, through *int64, throughCursor *int64, limit int) (HistoryPage, error) {
+	return s.history(ctx, room, before, beforeCursor, through, throughCursor, limit, true)
+}
+
+func (s *Store) history(ctx context.Context, room string, anchor *int64, anchorCursor string, through *int64, throughCursor *int64, limit int, newest bool) (HistoryPage, error) {
 	page := HistoryPage{Events: []protocol.Event{}}
-	if room == "" || after < 0 || limit < 1 || limit > 10000 || (through != nil && *through < 0) || (throughCursor != nil && *throughCursor < 0) {
+	if room == "" || (anchor != nil && *anchor < 0) || limit < 1 || limit > 10000 || (through != nil && *through < 0) || (throughCursor != nil && *throughCursor < 0) {
 		return page, fmt.Errorf("invalid history range")
 	}
 	cursor := int64(0)
-	if afterCursor != "" {
+	if anchorCursor != "" {
 		var err error
-		cursor, err = strconv.ParseInt(afterCursor, 10, 64)
-		if err != nil || cursor < 1 {
+		cursor, err = strconv.ParseInt(anchorCursor, 10, 64)
+		if err != nil || cursor < 1 || anchor == nil {
 			return page, fmt.Errorf("invalid cursor")
 		}
 	}
@@ -56,9 +66,22 @@ func (s *Store) History(ctx context.Context, room string, after int64, afterCurs
 	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE room_id=? AND seq<=? AND rowid<=?`, room, page.SnapshotSeq, page.SnapshotCursor).Scan(&page.Total); err != nil {
 		return page, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT rowid,event_id,seq,type,payload,created_at,event_json FROM events
-		WHERE room_id=? AND seq<=? AND rowid<=? AND (seq>? OR (seq=? AND ?>0 AND rowid>?))
-		ORDER BY seq,rowid LIMIT ?`, room, page.SnapshotSeq, page.SnapshotCursor, after, after, cursor, cursor, limit+1)
+	query := `SELECT rowid,event_id,seq,type,payload,created_at,event_json FROM events WHERE room_id=? AND seq<=? AND rowid<=?`
+	args := []any{room, page.SnapshotSeq, page.SnapshotCursor}
+	order, comparison := ` ORDER BY seq,rowid LIMIT ?`, `>`
+	if newest {
+		order, comparison = ` ORDER BY seq DESC,rowid DESC LIMIT ?`, `<`
+	}
+	if anchor != nil {
+		if cursor == 0 {
+			query += ` AND seq` + comparison + `?`
+			args = append(args, *anchor)
+		} else {
+			query += ` AND (seq,rowid)` + comparison + `(?,?)`
+			args = append(args, *anchor, cursor)
+		}
+	}
+	rows, err := tx.QueryContext(ctx, query+order, append(args, limit+1)...)
 	if err != nil {
 		return page, err
 	}

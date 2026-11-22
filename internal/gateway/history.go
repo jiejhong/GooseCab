@@ -58,10 +58,34 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 	}
 	// Reject duplicate parameters rather than accepting an ambiguous room/cursor.
 	for key, values := range q {
-		if len(values) != 1 || (key != "room_id" && key != "after_seq" && key != "after_cursor" && key != "through_seq" && key != "through_cursor" && key != "limit") {
+		if len(values) != 1 {
 			http.Error(w, "invalid history parameters", http.StatusBadRequest)
 			return
 		}
+		switch key {
+		case "room_id", "after_seq", "after_cursor", "before_seq", "before_cursor", "through_seq", "through_cursor", "limit", "order":
+		default:
+			http.Error(w, "invalid history parameters", http.StatusBadRequest)
+			return
+		}
+	}
+	isExport := r.URL.Path == "/api/events/export.html"
+	order := q.Get("order")
+	if q.Has("order") && (isExport || (order != "asc" && order != "desc")) {
+		http.Error(w, "invalid history order", http.StatusBadRequest)
+		return
+	}
+	newest := order == "desc"
+	seqKey, cursorKey := "after_seq", "after_cursor"
+	if newest {
+		if q.Has("after_seq") || q.Has("after_cursor") || (q.Has("before_cursor") && !q.Has("before_seq")) {
+			http.Error(w, "invalid descending history cursor", http.StatusBadRequest)
+			return
+		}
+		seqKey, cursorKey = "before_seq", "before_cursor"
+	} else if q.Has("before_seq") || q.Has("before_cursor") {
+		http.Error(w, "before_seq and before_cursor require descending history order", http.StatusBadRequest)
+		return
 	}
 	parseSeq := func(key string) (int64, error) {
 		if !q.Has(key) {
@@ -73,7 +97,7 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 		}
 		return n, nil
 	}
-	after, err := parseSeq("after_seq")
+	anchor, err := parseSeq(seqKey)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -81,15 +105,16 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 	var through *int64
 	if q.Has("through_seq") {
 		n, err := parseSeq("through_seq")
-		if err != nil || n < after {
+		if err != nil || (!newest && n < anchor) {
 			http.Error(w, "invalid through_seq", http.StatusBadRequest)
 			return
 		}
 		through = &n
 	}
-	if cursor := q.Get("after_cursor"); q.Has("after_cursor") {
+	cursor := q.Get(cursorKey)
+	if q.Has(cursorKey) {
 		if n, e := strconv.ParseInt(cursor, 10, 64); e != nil || n < 1 {
-			http.Error(w, "invalid after_cursor", http.StatusBadRequest)
+			http.Error(w, "invalid "+cursorKey, http.StatusBadRequest)
 			return
 		}
 	}
@@ -102,7 +127,6 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 		}
 		throughCursor = &n
 	}
-	isExport := r.URL.Path == "/api/events/export.html"
 	limit := 200
 	if isExport {
 		limit = 10000
@@ -117,7 +141,16 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 			return
 		}
 	}
-	page, err := a.Store.History(r.Context(), room, after, q.Get("after_cursor"), through, throughCursor, limit)
+	var page store.HistoryPage
+	if newest {
+		var before *int64
+		if q.Has(seqKey) {
+			before = &anchor
+		}
+		page, err = a.Store.HistoryNewest(r.Context(), room, before, cursor, through, throughCursor, limit)
+	} else {
+		page, err = a.Store.History(r.Context(), room, anchor, cursor, through, throughCursor, limit)
+	}
 	if err != nil {
 		// Do not expose database filenames or stored content in error responses.
 		http.Error(w, "could not read event history", http.StatusInternalServerError)
@@ -138,7 +171,7 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 		events = append(events, safe)
 	}
 	if !isExport {
-		nextSeq, nextID := after, q.Get("after_cursor")
+		nextSeq, nextID := anchor, cursor
 		if len(page.Events) > 0 {
 			last := page.Events[len(page.Events)-1]
 			nextSeq, nextID = last.Seq, page.NextCursor
@@ -152,7 +185,7 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 		})
 		return
 	}
-	doc := historyDocument{Room: redactor.text(room), Generated: time.Now().UTC().Format(time.RFC3339), After: after, Through: page.SnapshotSeq, Total: page.Total}
+	doc := historyDocument{Room: redactor.text(room), Generated: time.Now().UTC().Format(time.RFC3339), After: anchor, Through: page.SnapshotSeq, Total: page.Total}
 	actors := map[string]bool{}
 	for _, event := range events {
 		card := makeHistoryCard(event)
