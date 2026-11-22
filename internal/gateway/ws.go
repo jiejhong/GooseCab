@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jiejhong/GooseCab/internal/eventbus"
+	"github.com/jiejhong/GooseCab/internal/presence"
 	"github.com/jiejhong/GooseCab/internal/protocol"
 	"github.com/jiejhong/GooseCab/internal/registry"
 	"github.com/jiejhong/GooseCab/internal/store"
@@ -44,7 +45,16 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 	if w.Registry == nil {
 		w.Registry = registry.New()
 	}
+	var roomActivity presence.RoomActivity
+	if w.Store != nil {
+		roomActivity = w.Store.LatestRoomChatActivity
+	}
+	roomPresence := presence.New(roomActivity)
 	return Authenticate(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/rooms/presence" {
+			roomPresence.ServeHTTP(rw, r)
+			return
+		}
 		if r.URL.Path != "/api/v1/agent/connect" && r.URL.Path != "/ws" {
 			next.ServeHTTP(rw, r)
 			return
@@ -128,6 +138,7 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 			}
 		}()
 		agentID := ""
+		var session *presence.Session
 		persistWith := func(evt protocol.Event, afterSave func()) bool {
 			// Store allocates IDs/sequences atomically across WS and HTTP producers.
 			// Serialize WS append+broadcast so their live order follows storage order.
@@ -199,6 +210,12 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				if writeJSON(map[string]any{"type": "agent.welcome", "resume_from": after, "room_id": room}) != nil {
 					return
 				}
+				watched, err := roomPresence.Watch(c, room, agentID)
+				if err != nil {
+					return
+				}
+				session = watched
+				defer session.Close()
 				for _, cap := range hello.Capabilities {
 					announcement := protocol.CapabilityAnnounce{AgentID: agentID, CapabilityID: cap}
 					_ = protocol.NormalizeAnnouncement(&announcement)
@@ -230,6 +247,8 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				}
 				if err := w.publishCapability(r.Context(), room, agentID, typ, v.CapabilityID, v.RequestID, v); err != nil {
 					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				} else {
+					session.RecordActivity()
 				}
 			case "capability.progress":
 				var v protocol.CapabilityProgress
@@ -239,6 +258,8 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				}
 				if err := w.publishCapability(r.Context(), room, agentID, typ, "", v.RequestID, v); err != nil {
 					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				} else {
+					session.RecordActivity()
 				}
 			case "capability.result":
 				var v protocol.CapabilityResult
@@ -248,6 +269,8 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				}
 				if err := w.publishCapability(r.Context(), room, agentID, typ, "", v.RequestID, v); err != nil {
 					_ = writeJSON(map[string]any{"type": "error", "code": "invalid_execution", "request_id": v.RequestID, "message": err.Error()})
+				} else {
+					session.RecordActivity()
 				}
 			case "transfer.request", "transfer.accepted", "transfer.progress", "transfer.completed", "transfer.failed":
 				var payload map[string]any
@@ -256,7 +279,9 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 				if corr == "" {
 					corr, _ = payload["transfer_id"].(string)
 				}
-				publish(typ, "", corr, payload)
+				if publish(typ, "", corr, payload) {
+					session.RecordActivity()
+				}
 			case "event.publish":
 				var evt protocol.Event
 				if json.Unmarshal(msg["event"], &evt) != nil || strings.TrimSpace(evt.Type) == "" {
@@ -275,7 +300,9 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 					reject("reserved_event", "use the dedicated protocol frame for this event type")
 					continue
 				}
-				persist(evt)
+				if persist(evt) && (evt.Type == "chat.message" || evt.Type == "chat") && protocol.HasChatText(evt.Payload) {
+					session.RecordActivity()
+				}
 			default:
 				reject("unknown_type", "unsupported message type")
 			}

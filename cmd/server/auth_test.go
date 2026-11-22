@@ -46,6 +46,7 @@ func TestServerProtectsEveryAPIRoute(t *testing.T) {
 		authorizedStatus int
 	}{
 		{"GET", "/api/status", 200},
+		{"GET", "/api/rooms/presence?room_id=test", 200},
 		{"GET", "/api/agents", 200}, {"POST", "/api/agents", 400},
 		{"GET", "/api/capabilities?q=test", 200},
 		{"POST", "/api/invocations", 400}, {"POST", "/api/invocations/missing/progress", 400}, {"POST", "/api/invocations/missing/result", 400},
