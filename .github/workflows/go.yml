@@ -39,7 +39,7 @@ jobs:
 
   native-same-port-browser:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -55,12 +55,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Chromium and NSS certificate tools
+      - name: Check preinstalled browser tools and install Playwright
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libnss3-tools openssl
-          python -m pip install playwright==1.62.0
-          python -m playwright install --with-deps chromium
+          command -v certutil
+          openssl version
+          chromium --version
+          python -m pip install --disable-pip-version-check --timeout 20 --retries 2 playwright==1.62.0
       - name: Build Gateway and base-branch Agent with locked dependencies
         env:
           GOOSE_TEST_BASE: ${{ github.event.pull_request.base.sha }}
@@ -72,4 +72,4 @@ jobs:
       - name: Exercise native same-port TLS with a trusted synthetic CA
         run: |
           python tests/gateway-native-same-port-browser.py \
-            "$RUNNER_TEMP/goosecab-gateway" "$RUNNER_TEMP/goosecab-baseline-agent"
+            "$RUNNER_TEMP/goosecab-gateway" "$RUNNER_TEMP/goosecab-baseline-agent" --chromium "$(command -v chromium)"

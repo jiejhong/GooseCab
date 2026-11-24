@@ -95,7 +95,7 @@ Go 同端口回归使用一个合成监听器并同时连接 HTTP、HTTPS、WS �
 
 ### 原生同端口 Chromium
 
-GitHub PR 的 `native-same-port-browser` 作业运行下方用例。Linux 本地需要 OpenSSL、NSS 的 `certutil` 和 Playwright Chromium。用例只启动一个合成 Gateway 回环监听器，从临时合成旧库启动，使用基线 Agent 的原 HTTP/WS 访问方式。Chromium 在隔离测试 home 中先拒绝未获信任的服务端，向测试 NSS 库导入合成 CA 后，再用标准证书验证打开 HTTPS。同口验证旧 demo 的回放、历史及导出，以及新受保护房间的网页发言和导出。证书、私钥、NSS 库及测试数据随用例清理。关于 Chromium 的 NSS 库布局，见 [Linux 证书管理](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md)。
+GitHub PR 的 `native-same-port-browser` 作业用 Ubuntu 24.04 镜像预装的 Chromium、OpenSSL 和 NSS 工具运行下方用例。Linux 本地需要 OpenSSL、NSS 的 `certutil` 和 Playwright Chromium。用例只启动一个合成 Gateway 回环监听器，从临时合成旧库启动，使用基线 Agent 的原 HTTP/WS 访问方式。Chromium 在隔离测试 home 中先拒绝未获信任的服务端，向测试 NSS 库导入合成 CA 后，再用标准证书验证打开 HTTPS。同口验证旧 demo 的回放、历史及导出，以及新受保护房间的网页发言和导出。证书、私钥、NSS 库及测试数据随用例清理。关于 Chromium 的 NSS 库布局，见 [Linux 证书管理](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md)。
 
 ```sh
 # 先在基线 Git 工作树构建 go build -mod=readonly -o /tmp/goosecab-baseline-agent ./cmd/agent
