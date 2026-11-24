@@ -43,7 +43,7 @@ func checkRoomChatProtection(ctx context.Context, db roomProtectionReader, rooms
 // ProtectRoomChat records the protection for the database lifetime, before
 // the Gateway accepts requests. A protected room cannot be made public by
 // removing it from the config or restarting this binary in default mode.
-func (s *Store) ProtectRoomChat(ctx context.Context, rooms []string) error {
+func (s *Store) ProtectRoomChat(ctx context.Context, rooms []string, requireUnused bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -56,6 +56,16 @@ func (s *Store) ProtectRoomChat(ctx context.Context, rooms []string) error {
 		return err
 	}
 	for _, room := range rooms {
+		if requireUnused {
+			var legacyHistory bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM events WHERE room_id=?)
+				AND NOT EXISTS(SELECT 1 FROM room_chat_protected WHERE room_id=?)`, room, room).Scan(&legacyHistory); err != nil {
+				return err
+			}
+			if legacyHistory {
+				return errors.New("same-port protected rooms require new room IDs without existing history")
+			}
+		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO room_chat_protected(room_id) VALUES(?) ON CONFLICT(room_id) DO NOTHING", room); err != nil {
 			return err
 		}

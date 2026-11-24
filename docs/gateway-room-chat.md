@@ -4,14 +4,24 @@
 
 ## 启用条件
 
-保存权限为 `0600` 的配置，CLI 后端绑定明确的回环地址和端口。受控代理终止 HTTPS，保留精确外部 Host，只在确认前端 TLS 后设置唯一的 `X-Forwarded-Proto: https`，替换来客的转发头，并转发 WebSocket Upgrade。Gateway 检查 Host、实际回环本地地址和对端、转发协议及浏览器 Origin。不要公开暴露回环上游或让同机非受信进程访问。仅有明文 HTTP 的正式入口应保持功能关闭。
+保存权限为 `0600` 的配置。继续使用现有 HTTP 监听器时，可在同一个端口选择原生 HTTPS。配置 `trust_loopback_proxy: false`，把 `origin` 设为浏览器实际使用的 HTTPS 地址，端口与当前监听地址一致，并提供当前有效、客户端信任且匹配该主机名的证书链和私钥。保留原 `-addr`，再向同一 Gateway 进程传入：
+
+```sh
+-room-chat-config <private-policy-file>
+-room-chat-tls-cert <certificate-chain-file>
+-room-chat-tls-key <private-key-file>
+```
+
+该模式只使用一个 TCP 监听器。HTTP/WS 普通房间继续走原路径和原权限，HTTPS/WSS 能进入新配置的受保护房间。两种连接共用 Gateway、事件总线和 SQLite，按房间筛选事件。浏览器必须打开精确的 HTTPS 地址再输入个人凭据。受保护路径始终要求 TLS、正确 Host 和房间授权；浏览器写入还须同源。原生同端口模式只接受新房间 ID，或已记录保护标记的房间，避免在兼容升级时改变旧房间的访问规则。首次启用请选未分配且无历史的房间 ID。它使用 HTTP/1.1 和 TLS 1.2 或更高版本，并对等待读取连接首字节和请求头设置上限。
+
+已有可信 HTTPS 代理的部署可继续选择回环代理模式。CLI 后端绑定回环地址，代理保留精确 Host，确认前端 TLS 后替换转发头并设置唯一的 `X-Forwarded-Proto: https`，并转发 WebSocket Upgrade。该模式与原生同端口 TLS 分别配置。
 
 每个真人和 Agent 使用不同的 32 字节随机 base64url 凭据。只将原始凭据字符串的 SHA-256 十六进制摘要写入配置，由服务端绑定身份、有效期和房间。请通过私有机制提供凭据。
 
 ```json
 {
   "origin": "https://gateway.example.invalid",
-  "trust_loopback_proxy": true,
+  "trust_loopback_proxy": false,
   "rooms": [{
     "id": "<room-id>",
     "read_only": false,
@@ -43,7 +53,7 @@
 | 调用、传输和目录 | 当前仅支持聊天。旧调用及传输 HTTP 路由不能写入保护房间。能力和传输帧在保护房间禁用，连接不注册到全局目录。 | 保留原调用、传输和目录。 |
 | 授权到期 | 关闭已授权 WebSocket，阻断重新连接和回放。 | 沿用既有规则。 |
 
-受保护房间的旧 Agent 需要换为房间专用凭据，并将地址切到 HTTPS/WSS。基础聊天与回放可沿用现有客户端。需要自动收讫的 Agent 用候选版 Chat MCP。
+旧房间的 Agent 可按原 HTTP/WS 地址、凭据和房间继续工作。准备在新房间收取点名的 Agent 须配置同房间的专属凭据，并使用该房间 ID 和 WSS 地址，原客户端仍可用于回放和普通聊天。多人共用的旧令牌或 IP 地址不能提供可核验的个人身份，因此新房间的点名对象来自配置中的身份。先给已配置的真人和 Agent 提供房间内发言与点名。需要自动收讫的 Agent 用候选版 Chat MCP。
 
 ```sh
 chat-mcp -gateway-room-chat -url "$AGENT_WSS_URL" -room "$ROOM_ID" -agent "$AGENT_ID"
@@ -53,9 +63,9 @@ chat-mcp -gateway-room-chat -url "$AGENT_WSS_URL" -room "$ROOM_ID" -agent "$AGEN
 
 ## 切换及同库只读回退
 
-1. 先在独立环境用锁定的 Go/SQLite 驱动、合成旧库、新旧 Agent 和合成凭据跑全量测试。确认前端 TLS、代理授权边界、旧 Agent 的房间凭据与浏览器迁移，记录切换前事件 ID。若受保护房间依赖旧的能力调用或传输，先迁移相应工作流。
+1. 先在独立环境用锁定的 Go/SQLite 驱动、合成旧库、新旧 Agent 和合成凭据跑全量测试。确认实际证书信任及入口、目标房间凭据、旧房间的 HTTP/WS 回归，记录切换前事件 ID。若受保护房间依赖旧的能力调用或传输，先迁移相应工作流。
 2. 经授权生成并核验包含 WAL 的一致备份。停净所有能读取该文件的旧 Gateway 进程与上游连接，确认代理无备用旧读入口，再让候选独占服务该文件。受保护房间配置只在启动时加载，切换会断开原连接。普通房间重连后保持原访问方式。已在切换前被下载或缓存的历史不能由 Gateway 收回。
-3. 回退使用同一个候选、同一个 SQLite 文件、相同的保护配置，把目标房间设为 `"read_only": true` 后重启。历史、导出、在线、实时和回放继续受保护。发言和浏览器或 Agent 收讫暂停。校验切换后提交的事件 ID 仍可读。SQLite 中持久记录房间保护，移除配置或把保护房间从配置中删掉都会阻止候选启动。
+3. 回退使用同一个候选、同一个 SQLite 文件、同一监听及证书、相同的保护配置，把目标房间设为 `"read_only": true` 后重启。历史、导出、在线、实时和回放继续受保护。发言和浏览器或 Agent 收讫暂停。校验切换后提交的事件 ID 仍可读。SQLite 中持久记录房间保护，移除配置或把保护房间从配置中删掉都会阻止候选启动。
 4. 旧二进制不会识别持久保护标记，只能离线用于恢复检查。无法维持保护时关闭对应入口并保留现有数据库及 WAL。旧快照只用于另址恢复演练，覆盖它会丢失之后的提交。
 
 ## 本地验证
@@ -72,3 +82,5 @@ python tests/gateway-room-chat-browser.py /tmp/goosecab-gateway /tmp/goosecab-ch
 ```
 
 浏览器测试使用本地 HTTPS 代理、独立合成旧库、实际 Gateway、基线 Agent 和新版 Chat MCP 进程，验证分页、导出、同源发言、收讫和同库回退。Go 入口测试同时保持旧 Agent 的另一房间连接，验证它仍可发言且收不到受保护事件，并检查 Agent 在身份绑定前无法读取回放。
+
+Go 同端口回归使用一个合成监听器并同时连接 HTTP、HTTPS、WS 和 WSS。它检查旧连接发言、旧历史 ID、网页发言和点名、原房间及受保护房间在各自的历史与导出中的可见性，以及同库只读回退。

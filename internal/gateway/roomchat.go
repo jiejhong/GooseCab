@@ -53,7 +53,7 @@ func NewRoomChat(ctx context.Context, ws *WS, config RoomChatConfig, legacy stri
 		rooms = append(rooms, room)
 	}
 	slices.Sort(rooms)
-	if err := ws.Store.ProtectRoomChat(ctx, rooms); err != nil {
+	if err := ws.Store.ProtectRoomChat(ctx, rooms, config.RequireUnusedRooms); err != nil {
 		return nil, err
 	}
 	return &RoomChat{ws: ws, policy: policy, legacy: legacy, writes: make(map[roomChatWriter]time.Time)}, nil

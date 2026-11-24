@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jiejhong/GooseCab/internal/eventbus"
 	"github.com/jiejhong/GooseCab/internal/gateway"
@@ -33,6 +34,8 @@ func main() {
 	}
 	flag.StringVar(&addr, "addr", addr, "HTTP and WebSocket listen address (also GOOSECAB_ADDR)")
 	roomChatFile := flag.String("room-chat-config", "", "private policy file for opt-in Gateway room chat")
+	roomChatCert := flag.String("room-chat-tls-cert", "", "certificate chain for HTTPS on the same port as existing HTTP")
+	roomChatKey := flag.String("room-chat-tls-key", "", "private key for protected HTTPS on the existing port")
 	flag.Parse()
 
 	relayConfig, err := relayConfigFromEnv()
@@ -40,29 +43,47 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s, err := store.Open(path)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer s.Close()
-
 	var roomChat *gateway.RoomChatConfig
 	if *roomChatFile != "" {
 		config, err := gateway.ReadRoomChatConfig(*roomChatFile)
 		if err != nil {
 			log.Fatal(err)
 		}
-		host, _, err := net.SplitHostPort(addr)
-		if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() || !config.TrustLoopbackProxy {
-			log.Fatal("protected rooms require an explicit loopback listener behind a trusted HTTPS proxy")
-		}
 		roomChat = &config
 	}
+	tlsConfig, err := samePortTLS(roomChat, addr, *roomChatCert, *roomChatKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if roomChat != nil && tlsConfig == nil {
+		host, _, err := net.SplitHostPort(addr)
+		if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() || !roomChat.TrustLoopbackProxy {
+			log.Fatal("protected rooms require same-port TLS or an explicit loopback listener behind a trusted HTTPS proxy")
+		}
+	}
+	var listener net.Listener
+	if tlsConfig != nil {
+		roomChat.RequireUnusedRooms = true
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer listener.Close()
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Close()
 	h, err := assembleServerHandler(s, addr, path, relayConfig, roomChat)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)
+	if listener != nil {
+		server := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, TLSConfig: tlsConfig}
+		log.Fatal(server.Serve(newSamePortListener(listener, tlsConfig)))
+	}
 	log.Fatal(http.ListenAndServe(addr, h))
 }
 

@@ -24,6 +24,7 @@ type RoomChatConfig struct {
 	Origin             string         `json:"origin"`
 	TrustLoopbackProxy bool           `json:"trust_loopback_proxy"`
 	Rooms              []RoomChatRoom `json:"rooms"`
+	RequireUnusedRooms bool           `json:"-"`
 }
 
 type RoomChatRoom struct {
