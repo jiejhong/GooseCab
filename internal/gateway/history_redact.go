@@ -11,9 +11,9 @@ import (
 
 const redactedValue = "[已隐藏]"
 
-type historyRedactor struct{ token string }
+type historyRedactor struct{ tokens []string }
 
-func newHistoryRedactor(token string) historyRedactor { return historyRedactor{token: token} }
+func newHistoryRedactor(tokens ...string) historyRedactor { return historyRedactor{tokens: tokens} }
 
 var (
 	credentialText = regexp.MustCompile(`(?i)\b(bearer\s+)[^\s"'<>]+|(["']?(?:[a-z_-]*token|[a-z_-]*secret|password|passwd|api[_-]?key|authorization)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;"'<>]+)`)
@@ -22,8 +22,10 @@ var (
 )
 
 func (r historyRedactor) text(s string) string {
-	if r.token != "" {
-		s = strings.ReplaceAll(s, r.token, redactedValue)
+	for _, token := range r.tokens {
+		if token != "" {
+			s = strings.ReplaceAll(s, token, redactedValue)
+		}
 	}
 	s = credentialText.ReplaceAllString(s, "${1}${2}"+redactedValue)
 	s = fileURI.ReplaceAllString(s, redactedValue)

@@ -15,21 +15,26 @@ import (
 )
 
 func Dial(ctx context.Context, raw, room, id, token string) (*websocket.Conn, error) {
-	return dial(ctx, raw, room, id, token, "")
+	return dial(ctx, raw, room, id, token, "", false)
 }
 
-func dial(ctx context.Context, raw, room, id, token, mode string) (*websocket.Conn, error) {
+func dial(ctx context.Context, raw, room, id, token, mode string, gateway bool) (*websocket.Conn, error) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "ws" || u.Hostname() != "127.0.0.1" || u.Port() == "" ||
-		u.User != nil || u.Path != "/api/v1/agent/connect" || u.RawPath != "" || u.RawQuery != "" ||
+	path, scheme := "/api/v1/agent/connect", "GooseCabLocal"
+	if gateway {
+		path, scheme = "/api/room-chat/agent", "GooseCabRoom"
+	}
+	if err != nil || u.Hostname() == "" ||
+		(!(gateway && u.Scheme == "wss") && !(u.Scheme == "ws" && u.Hostname() == "127.0.0.1" && u.Port() != "")) ||
+		u.User != nil || u.Path != path || u.RawPath != "" || u.RawQuery != "" ||
 		u.ForceQuery || u.Fragment != "" || token == "" || strings.TrimSpace(room) == "" || strings.TrimSpace(id) == "" {
-		return nil, errors.New("local room requires a credential and ws://127.0.0.1:port/api/v1/agent/connect")
+		return nil, errors.New("room transport requires its exact protected endpoint and an independent credential")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	u.RawQuery = url.Values{"room_id": {room}}.Encode()
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	conn, response, err := dialer.DialContext(ctx, u.String(), http.Header{"Authorization": {"GooseCabLocal " + token}})
+	conn, response, err := dialer.DialContext(ctx, u.String(), http.Header{"Authorization": {scheme + " " + token}})
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()

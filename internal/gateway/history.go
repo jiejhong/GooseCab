@@ -49,7 +49,7 @@ func (a *HistoryAPI) Handler(next http.Handler) http.Handler {
 	})
 }
 
-func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string) {
+func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, tokens ...string) {
 	q := r.URL.Query()
 	room := q.Get("room_id")
 	if strings.TrimSpace(room) == "" || len(room) > 256 {
@@ -160,7 +160,7 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, token string)
 		http.Error(w, "Export exceeds 10000 events. Select a smaller after_seq / through_seq range; no partial document was exported.", http.StatusRequestEntityTooLarge)
 		return
 	}
-	redactor := newHistoryRedactor(token)
+	redactor := newHistoryRedactor(tokens...)
 	events := make([]protocol.Event, 0, len(page.Events))
 	for _, event := range page.Events {
 		safe, err := redactor.event(event)

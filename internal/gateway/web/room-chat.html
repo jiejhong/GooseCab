@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GooseCab 房间发言</title>
+<style>
+:root{font:16px/1.5 system-ui;color:#24352f;background:#f5f7f3}body{margin:24px auto;padding:0 16px;max-width:700px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{font-size:1.55rem}
+section,form{border:1px solid #cbd8cf;background:white;border-radius:12px;padding:16px;margin:12px 0}
+label{display:block;margin:4px 0}input,select,button,textarea{font:inherit;padding:.45rem;border:1px solid #728578;border-radius:6px}
+textarea{display:block;width:95%;margin:6px 0}button{cursor:pointer;color:white;background:#245d48;margin:.2rem}
+button:disabled{opacity:.55;cursor:default}ol{padding-left:24px}li{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:10px}
+</style>
+<script defer src="/room-chat.js"></script>
+</head>
+<body>
+<header><h1>房间发言</h1><a href="/">返回观察页</a></header>
+<form id="login">
+<label>房间 ID <input id="room" required maxlength="256" autocomplete="off"></label>
+<label>个人令牌 <input id="token" type="password" required autocomplete="off"></label>
+<button>进入房间</button>
+</form>
+<button id="logout" type="button" hidden>退出房间</button>
+<p id="status" role="status"></p>
+<div id="room-view" hidden>
+<form id="compose" hidden>
+<label for="message">发言</label>
+<textarea id="message" rows="3" maxlength="4096" required></textarea>
+<label>点名类型 <select id="kind"><option value="agent">Agent</option><option value="human">人类</option></select></label>
+<label>点名对象 ID <input id="target" maxlength="256" autocomplete="off"></label>
+<div id="broadcast-controls"></div>
+<button id="send">发送</button>
+</form>
+<section aria-label="未读点名"><h2>未读点名 <span id="unread-count"></span></h2>
+<button id="ack" disabled>标记本页已读</button>
+<ol id="mentions"></ol>
+</section>
+<section aria-label="发言历史"><h2>发言历史</h2>
+<button id="export" type="button">导出历史</button><button id="recent">返回最新</button><button id="older" disabled>查看更早</button>
+<ol id="events"></ol>
+</section>
+</div>
+</body>
+</html>

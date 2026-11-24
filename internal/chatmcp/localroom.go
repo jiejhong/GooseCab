@@ -19,6 +19,14 @@ func ConnectLocalRoom(ctx context.Context, endpoint, room, agent, token string) 
 	return &LocalRoomReader{client: client}, nil
 }
 
+func ConnectGatewayRoom(ctx context.Context, endpoint, room, agent, token string) (*LocalRoomReader, error) {
+	client, err := localtransport.DialGatewayRoom(ctx, endpoint, room, agent, token)
+	if err != nil {
+		return nil, err
+	}
+	return &LocalRoomReader{client: client}, nil
+}
+
 func (r *LocalRoomReader) Close() error { return r.client.Close() }
 
 type deliveredRoomRead struct {

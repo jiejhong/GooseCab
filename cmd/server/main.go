@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -30,6 +32,7 @@ func main() {
 		addr = defaultAddr
 	}
 	flag.StringVar(&addr, "addr", addr, "HTTP and WebSocket listen address (also GOOSECAB_ADDR)")
+	roomChatFile := flag.String("room-chat-config", "", "private policy file for opt-in Gateway room chat")
 	flag.Parse()
 
 	relayConfig, err := relayConfigFromEnv()
@@ -43,7 +46,22 @@ func main() {
 	}
 	defer s.Close()
 
-	h := newServerHandlerWithRelayConfig(s, addr, path, relayConfig)
+	var roomChat *gateway.RoomChatConfig
+	if *roomChatFile != "" {
+		config, err := gateway.ReadRoomChatConfig(*roomChatFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		host, _, err := net.SplitHostPort(addr)
+		if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() || !config.TrustLoopbackProxy {
+			log.Fatal("protected rooms require an explicit loopback listener behind a trusted HTTPS proxy")
+		}
+		roomChat = &config
+	}
+	h, err := assembleServerHandler(s, addr, path, relayConfig, roomChat)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("GooseCab gateway listening on %s (database %s)", addr, path)
 	log.Fatal(http.ListenAndServe(addr, h))
 }
@@ -55,7 +73,29 @@ func newServerHandler(s *store.Store, addr, path string) http.Handler {
 }
 
 func newServerHandlerWithRelayConfig(s *store.Store, addr, path string, relayConfig relay.Config) http.Handler {
+	h, err := assembleServerHandler(s, addr, path, relayConfig, nil)
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "Gateway configuration unavailable", http.StatusServiceUnavailable)
+		})
+	}
+	return h
+}
+
+func assembleServerHandler(s *store.Store, addr, path string, relayConfig relay.Config, config *gateway.RoomChatConfig) (http.Handler, error) {
 	api := &gateway.API{Registry: registry.New()}
+	bus := eventbus.New()
+	ws := &gateway.WS{Store: s, Bus: bus, Registry: api.Registry}
+	var chat *gateway.RoomChat
+	if config != nil {
+		var err error
+		chat, err = gateway.NewRoomChat(context.Background(), ws, *config, os.Getenv("GOOSECAB_AGENT_TOKEN"))
+		if err != nil {
+			return nil, err
+		}
+	} else if err := s.CheckRoomChatProtection(context.Background(), nil); err != nil {
+		return nil, err
+	}
 	base := http.NewServeMux()
 	// The relay is deliberately outside the event/store stack. It only pairs
 	// bounded streams; agent-local recipients verify and store the bytes.
@@ -78,14 +118,16 @@ func newServerHandlerWithRelayConfig(s *store.Store, addr, path string, relayCon
 	})
 	base.Handle("/api/", api.Handler())
 
-	mux := (&gateway.P1API{Service: p1.New(s)}).Handler(base)
+	mux := (&gateway.P1API{Service: p1.New(s), RoomProtected: chat.ProtectedRoom}).Handler(base)
 	mux = (&gateway.P2API{Service: p2.New(s, api.Registry)}).Handler(mux)
-	bus := eventbus.New()
-	mux = (&gateway.TransferAPI{Service: transfer.New(s, bus)}).Handler(mux)
+	mux = (&gateway.TransferAPI{Service: transfer.New(s, bus), RoomProtected: chat.ProtectedRoom}).Handler(mux)
 	mux = (&gateway.HistoryAPI{Store: s}).Handler(mux)
 	mux = gateway.Observer(mux)
-	h := (&gateway.WS{Store: s, Bus: bus, Registry: api.Registry}).Handler(mux)
-	return gateway.Authenticate(h)
+	legacy := gateway.Authenticate(ws.Handler(mux))
+	if chat == nil {
+		return legacy, nil
+	}
+	return chat.Handler(legacy), nil
 }
 
 func websocketEndpoint(addr string) string {
