@@ -36,3 +36,40 @@ jobs:
         run: python3 tests/collaboration-smoke.py
       - name: Skill MCP and knowledge process smoke test
         run: python3 tests/providers-smoke.py
+
+  native-same-port-browser:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium and NSS certificate tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3-tools openssl
+          python -m pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+      - name: Build Gateway and base-branch Agent with locked dependencies
+        env:
+          GOOSE_TEST_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/goosecab-agent-baseline" "$GOOSE_TEST_BASE"
+          go build -mod=readonly -o "$RUNNER_TEMP/goosecab-gateway" ./cmd/server
+          go -C "$RUNNER_TEMP/goosecab-agent-baseline" build -buildvcs=false -mod=readonly \
+            -o "$RUNNER_TEMP/goosecab-baseline-agent" ./cmd/agent
+      - name: Exercise native same-port TLS with a trusted synthetic CA
+        run: |
+          python tests/gateway-native-same-port-browser.py \
+            "$RUNNER_TEMP/goosecab-gateway" "$RUNNER_TEMP/goosecab-baseline-agent"

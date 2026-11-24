@@ -61,6 +61,14 @@ chat-mcp -gateway-room-chat -url "$AGENT_WSS_URL" -room "$ROOM_ID" -agent "$AGEN
 
 `AGENT_WSS_URL` 指向 `/api/room-chat/agent`。从 `GOOSECAB_ROOM_CHAT_AGENT_TOKEN` 读取独立 Agent 凭据。只有 `room_read` 页成功解码、校验、交付后才自动确认。服务端检查同连接交付证明和实际页内事件 ID，只清该 Agent 的未读。普通 HTTP 历史或旧 WebSocket 接收不会自动确认。
 
+## 已有 demo 房间的迁移
+
+此候选在同一端口为新房间提供网页发言。已有 demo 房间保留原 HTTP/WS 权限、历史和房间 ID。它未启用受保护网页发言，原生同端口模式会拒绝已有历史的旧房间 ID。回环代理模式也不应被当作同端口兼容迁移。
+
+要在原房间 ID 启用发言，至少需要房间负责人同意将该房间的历史、导出、在线状态与回放改为认证访问，并授权对这一房间执行原地保护迁移及一次受控重启。迁移实现还需显式识别旧房间，原子持久化保护标记、保留历史事件 ID 和现有 SQLite、停止旧进程及所有旧读入口，然后先按保护后的只读模式验证，再放开发言。其他房间可维持原权限。
+
+已有房间从匿名或共享令牌切换到保护后，旧客户端须改用 HTTPS/WSS 及与房间和稳定身份绑定的专属凭据。共享令牌不能承担个人点名或收讫授权。受保护房间目前只覆盖聊天，旧能力调用与传输需要迁移或继续留在普通房间。历史曾公开下载的副本无法收回。维持该房间原有匿名读取，同时在其中写入受保护内容，需要额外设计并验证按事件的读隔离；此候选没有该能力。
+
 ## 切换及同库只读回退
 
 1. 先在独立环境用锁定的 Go/SQLite 驱动、合成旧库、新旧 Agent 和合成凭据跑全量测试。确认实际证书信任及入口、目标房间凭据、旧房间的 HTTP/WS 回归，记录切换前事件 ID。若受保护房间依赖旧的能力调用或传输，先迁移相应工作流。
@@ -81,6 +89,20 @@ python tests/gateway-room-chat-browser.py /tmp/goosecab-gateway /tmp/goosecab-ch
   /tmp/goosecab-proxy.test /tmp/goosecab-baseline-agent
 ```
 
-浏览器测试使用本地 HTTPS 代理、独立合成旧库、实际 Gateway、基线 Agent 和新版 Chat MCP 进程，验证分页、导出、同源发言、收讫和同库回退。Go 入口测试同时保持旧 Agent 的另一房间连接，验证它仍可发言且收不到受保护事件，并检查 Agent 在身份绑定前无法读取回放。
+上述 `gateway-room-chat-browser.py` 使用本地 HTTPS 代理，验证分页、导出、同源发言、收讫和同库回退。Go 入口测试验证 Agent 在身份绑定前无法读取回放。此前的原生同端口 Chromium 试跑在仓库工作树外完成，使用了允许测试证书错误的浏览器配置。正式 Go CI 当时覆盖了原生同端口 Go 回归。
 
 Go 同端口回归使用一个合成监听器并同时连接 HTTP、HTTPS、WS 和 WSS。它检查旧连接发言、旧历史 ID、网页发言和点名、原房间及受保护房间在各自的历史与导出中的可见性，以及同库只读回退。
+
+### 原生同端口 Chromium
+
+GitHub PR 的 `native-same-port-browser` 作业运行下方用例。Linux 本地需要 OpenSSL、NSS 的 `certutil` 和 Playwright Chromium。用例只启动一个合成 Gateway 回环监听器，从临时合成旧库启动，使用基线 Agent 的原 HTTP/WS 访问方式。Chromium 在隔离测试 home 中先拒绝未获信任的服务端，向测试 NSS 库导入合成 CA 后，再用标准证书验证打开 HTTPS。同口验证旧 demo 的回放、历史及导出，以及新受保护房间的网页发言和导出。证书、私钥、NSS 库及测试数据随用例清理。关于 Chromium 的 NSS 库布局，见 [Linux 证书管理](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md)。
+
+```sh
+# 先在基线 Git 工作树构建 go build -mod=readonly -o /tmp/goosecab-baseline-agent ./cmd/agent
+go build -mod=readonly -o /tmp/goosecab-gateway ./cmd/server
+python -m pip install playwright==1.62.0
+python -m playwright install chromium
+python tests/gateway-native-same-port-browser.py /tmp/goosecab-gateway /tmp/goosecab-baseline-agent
+```
+
+已安装本机 Chromium 时，可以传入 `--chromium /path/to/chromium`。
