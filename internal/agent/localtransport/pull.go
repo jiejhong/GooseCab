@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -17,18 +18,27 @@ import (
 const requestTimeout = 5 * time.Second
 
 type PullClient struct {
-	conn  *websocket.Conn
-	room  string
-	agent string
-	mu    sync.Mutex
+	conn    *websocket.Conn
+	room    string
+	agent   string
+	gateway bool
+	mu      sync.Mutex
 }
 
 func DialPull(ctx context.Context, raw, room, id, token string) (*PullClient, error) {
-	conn, err := dial(ctx, raw, room, id, token, protocol.LocalRoomPullMode)
+	conn, err := dial(ctx, raw, room, id, token, protocol.LocalRoomPullMode, false)
 	if err != nil {
 		return nil, err
 	}
 	return &PullClient{conn: conn, room: room, agent: id}, nil
+}
+
+func DialGatewayRoom(ctx context.Context, raw, room, id, token string) (*PullClient, error) {
+	conn, err := dial(ctx, raw, room, id, token, protocol.LocalRoomPullMode, true)
+	if err != nil {
+		return nil, err
+	}
+	return &PullClient{conn: conn, room: room, agent: id, gateway: true}, nil
 }
 
 func (c *PullClient) Close() error { return c.conn.Close() }
@@ -125,7 +135,7 @@ func (c *PullClient) validLocalRoomPage(query protocol.LocalRoomReadQuery, resul
 	nextSeq := query.AfterSeq
 	inPage := make(map[string]bool, len(page.Events))
 	for i, event := range page.Events {
-		if event.EventID == "" || event.RoomID != c.room || event.Type != "chat.message" ||
+		if event.EventID == "" || event.RoomID != c.room || (event.Type == "" || (!c.gateway && event.Type != "chat.message")) ||
 			event.Seq < 1 || event.Seq < nextSeq || (i == 0 && query.AfterCursor == "" && event.Seq == nextSeq) ||
 			inPage[event.EventID] {
 			return false
@@ -137,16 +147,29 @@ func (c *PullClient) validLocalRoomPage(query protocol.LocalRoomReadQuery, resul
 		return false
 	}
 	if len(page.Events) == 0 {
-		return !page.HasMore && page.NextCursor == query.AfterCursor && result.Receipt == nil
+		return !page.HasMore && page.NextCursor == query.AfterCursor && result.Receipt == nil && len(page.PrivateMentionEventIDs) == 0
 	}
 	row, err := strconv.Atoi(page.NextCursor)
-	if err != nil || row < len(page.Events) {
+	if err != nil || row < 1 || (!c.gateway && row < len(page.Events)) {
 		return false
 	}
 	if query.AfterCursor != "" {
 		before, err := strconv.Atoi(query.AfterCursor)
-		if err != nil || row-len(page.Events) != before {
+		if err != nil || (!c.gateway && row-len(page.Events) != before) ||
+			(c.gateway && page.NextSeq == query.AfterSeq && row <= before) {
 			return false
+		}
+	}
+	if ids := page.PrivateMentionEventIDs; len(ids) > 0 {
+		if !c.gateway || (result.Receipt != nil && !slices.Equal(ids, result.Receipt.EventIDs)) {
+			return false
+		}
+		seen := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if !inPage[id] || seen[id] {
+				return false
+			}
+			seen[id] = true
 		}
 	}
 	if result.Receipt == nil {

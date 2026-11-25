@@ -35,6 +35,13 @@ type Service struct {
 func New(s *store.Store, b *eventbus.Bus) *Service {
 	return &Service{store: s, bus: b, items: map[string]Metadata{}}
 }
+func (m Metadata) EventRoom() string {
+	if m.RoomID == "" {
+		return "transfers"
+	}
+	return m.RoomID
+}
+
 func (s *Service) Save(ctx context.Context, m Metadata, typ string) (Metadata, error) {
 	if m.Status == "" {
 		m.Status = "requested"
@@ -46,11 +53,7 @@ func (s *Service) Save(ctx context.Context, m Metadata, typ string) (Metadata, e
 	if s.store == nil {
 		return m, nil
 	}
-	room := m.RoomID
-	if room == "" {
-		room = "transfers"
-	}
-	evt := protocol.Event{RoomID: room, Type: typ, CorrelationID: m.ID, TS: m.UpdatedAt, Payload: m}
+	evt := protocol.Event{RoomID: m.EventRoom(), Type: typ, CorrelationID: m.ID, TS: m.UpdatedAt, Payload: m}
 	e := s.store.AppendNext(ctx, &evt)
 	if e == nil && s.bus != nil {
 		s.bus.Publish(evt)

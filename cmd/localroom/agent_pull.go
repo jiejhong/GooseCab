@@ -2,79 +2,28 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/jiejhong/GooseCab/internal/protocol"
+	"github.com/jiejhong/GooseCab/internal/roomreceipt"
 )
 
 func (s *roomServer) serveAgentPull(ctx context.Context, conn *websocket.Conn, actor protocol.Actor,
 	send func(any) bool, reject func(string) bool) {
-	var delivered *protocol.LocalRoomPageReceipt
-	for ctx.Err() == nil {
-		messageType, raw, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		var cmd agentCommand
-		if messageType != websocket.TextMessage || !utf8.Valid(raw) || decodeJSON(raw, &cmd) != nil ||
-			len(cmd.Event) != 0 || cmd.EventID != "" || cmd.DeliveryID != "" {
-			if !reject("invalid_request") {
-				return
+	roomreceipt.Serve(ctx, conn, send, reject,
+		func(read protocol.LocalRoomReadQuery) (protocol.LocalRoomReadReply, string) {
+			return s.agentReadPage(actor, read)
+		},
+		func(ids []string) error {
+			if s.commitAcknowledgement(ctx, actor, ids) != http.StatusNoContent {
+				return errors.New("acknowledgement failed")
 			}
-			continue
-		}
-		switch {
-		case cmd.Type == "room.read" && cmd.Read != nil && cmd.Receipt == nil:
-			delivered = nil
-			reply, code := s.agentReadPage(actor, *cmd.Read)
-			if code != "" {
-				if !reject(code) {
-					return
-				}
-				continue
-			}
-			wire, err := json.Marshal(reply)
-			if err != nil || len(wire)+1 > protocol.LocalRoomPageBytes {
-				if !reject("page_too_large") {
-					return
-				}
-				continue
-			}
-			if !send(json.RawMessage(wire)) {
-				return
-			}
-			delivered = reply.Receipt
-		case cmd.Type == "mention.page_ack" && cmd.Receipt != nil && cmd.Read == nil:
-			if delivered == nil ||
-				subtle.ConstantTimeCompare([]byte(delivered.DeliveryID), []byte(cmd.Receipt.DeliveryID)) != 1 ||
-				!slices.Equal(delivered.EventIDs, cmd.Receipt.EventIDs) {
-				if !reject("unconfirmed_delivery") {
-					return
-				}
-				continue
-			}
-			if s.commitAcknowledgement(ctx, actor, delivered.EventIDs) != http.StatusNoContent {
-				if !reject("ack_failed") {
-					return
-				}
-				continue
-			}
-			// Repeating the last receipt succeeds without further mutations.
-			if !send(map[string]string{"type": "mention.page_acknowledged", "delivery_id": delivered.DeliveryID}) {
-				return
-			}
-		default:
-			if !reject("unsupported_message") {
-				return
-			}
-		}
-	}
+			return nil
+		})
 }
 
 func (s *roomServer) agentReadPage(actor protocol.Actor, read protocol.LocalRoomReadQuery) (protocol.LocalRoomReadReply, string) {

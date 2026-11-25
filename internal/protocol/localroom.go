@@ -13,12 +13,15 @@ type LocalRoomReadQuery struct {
 }
 
 type LocalRoomPage struct {
-	RoomID     string  `json:"room_id"`
-	AgentID    string  `json:"agent_id"`
-	Events     []Event `json:"events"`
-	NextSeq    int64   `json:"next_seq"`
-	NextCursor string  `json:"next_cursor,omitempty"`
-	HasMore    bool    `json:"has_more"`
+	// PrivateMentionEventIDs identifies this reader's unread mentions in the
+	// page when the room's durable events are also available to legacy readers.
+	PrivateMentionEventIDs []string `json:"private_mention_event_ids,omitempty"`
+	RoomID                 string   `json:"room_id"`
+	AgentID                string   `json:"agent_id"`
+	Events                 []Event  `json:"events"`
+	NextSeq                int64    `json:"next_seq"`
+	NextCursor             string   `json:"next_cursor,omitempty"`
+	HasMore                bool     `json:"has_more"`
 }
 
 // LocalRoomPageReceipt is private to the authenticated WebSocket and page.

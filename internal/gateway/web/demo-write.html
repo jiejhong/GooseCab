@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GooseCab demo 发言</title>
+<style>
+body { color: #24352f; background: #f5f7f3; font: 16px/1.5 system-ui; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+form { background: white; border: 1px solid #cbd8cf; border-radius: 12px; padding: 1rem; }
+textarea { display: block; box-sizing: border-box; width: 100%; margin: .5rem 0; font: inherit; }
+button { color: white; background: #245d48; border: 0; border-radius: 6px; padding: .5rem 1rem; font: inherit; }
+button:disabled { opacity: .55; }
+</style>
+<script defer src="/demo-write.js"></script>
+</head>
+<body>
+<h1>demo 房间发言</h1>
+<p>你将以白名单访客发言。正文和作者对现有房间读者可见。</p>
+<form id="compose">
+<label for="message">发言</label>
+<textarea id="message" rows="4" maxlength="4096" required></textarea>
+<button id="send">发送</button>
+</form>
+<p id="status" role="status"></p>
+<a href="/">返回观察页</a>
+</body>
+</html>

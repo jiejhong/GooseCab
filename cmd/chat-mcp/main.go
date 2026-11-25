@@ -16,6 +16,7 @@ func main() {
 	room := flag.String("room", "", "fixed room")
 	id := flag.String("agent", "", "fixed agent ID")
 	localRoom := flag.Bool("local-room", false, "use room_read with an isolated loopback Agent")
+	gatewayRoom := flag.Bool("gateway-room-chat", false, "use independently authenticated Gateway room_read")
 	root := flag.String("skill-root", "", "existing independently approved local skill store (disabled by default)")
 	cap := flag.String("skill-capability", "", "exact approved capability")
 	version := flag.Int("skill-version", 0, "exact approved version")
@@ -23,12 +24,16 @@ func main() {
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if *localRoom {
+	if *localRoom || *gatewayRoom {
+		if *localRoom && *gatewayRoom {
+			fmt.Fprintln(os.Stderr, "select exactly one room transport")
+			os.Exit(1)
+		}
 		if *root != "" || *cap != "" || *version != 0 || *digest != "" {
 			fmt.Fprintln(os.Stderr, "isolated room_read cannot enable a pinned skill")
 			os.Exit(1)
 		}
-		if err := serveLocalRoom(ctx, *endpoint, *room, *id); err != nil {
+		if err := serveLocalRoom(ctx, *endpoint, *room, *id, *gatewayRoom); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -57,8 +62,12 @@ func main() {
 	}
 }
 
-func serveLocalRoom(ctx context.Context, endpoint, room, id string) error {
-	reader, err := chatmcp.ConnectLocalRoom(ctx, endpoint, room, id, os.Getenv("GOOSECAB_LOCALROOM_AGENT_TOKEN"))
+func serveLocalRoom(ctx context.Context, endpoint, room, id string, gateway bool) error {
+	connect, env := chatmcp.ConnectLocalRoom, "GOOSECAB_LOCALROOM_AGENT_TOKEN"
+	if gateway {
+		connect, env = chatmcp.ConnectGatewayRoom, "GOOSECAB_ROOM_CHAT_AGENT_TOKEN"
+	}
+	reader, err := connect(ctx, endpoint, room, id, os.Getenv(env))
 	if err != nil {
 		return err
 	}
