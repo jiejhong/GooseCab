@@ -26,11 +26,12 @@ const (
 var roomChatAssets embed.FS
 
 type RoomChat struct {
-	ws     *WS
-	policy *roomChatPolicy
-	legacy string
-	mu     sync.Mutex
-	writes map[roomChatWriter]time.Time
+	ws       *WS
+	policy   *roomChatPolicy
+	legacy   string
+	mu       sync.Mutex
+	writes   map[roomChatWriter]time.Time
+	activity roomChatActivity
 }
 
 type roomChatWriter struct {
@@ -106,7 +107,7 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		}
 		method := http.MethodGet
 		switch path {
-		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/unread", roomChatAgentPath, roomChatExportPath:
+		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/activity", "/api/room-chat/unread", roomChatAgentPath, roomChatExportPath:
 		case "/api/room-chat/messages", "/api/room-chat/unread/ack":
 			method = http.MethodPost
 		default:
@@ -193,7 +194,11 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 			writeRoomChatJSON(w, http.StatusOK, map[string]any{"actor": protocol.Actor{Kind: "human", ID: redact.text(actor.ID)},
 				"display_name": redact.text(member.DisplayName), "write": member.Write && !settings.readOnly, "broadcast": member.Broadcast && !settings.readOnly, "ack": !settings.readOnly, "legacy_audience": settings.legacyAudience})
 		case "/api/room-chat/history", roomChatExportPath, "/api/events", "/api/events/export.html":
-			(&HistoryAPI{Store: c.ws.Store}).serve(w, r, c.legacy, token)
+			(&HistoryAPI{Store: c.ws.Store}).serve(w, r, func() {
+				c.activity.record(ctx, room, actor)
+			}, c.legacy, token)
+		case "/api/room-chat/activity":
+			c.serveActivity(w, room, token, settings)
 		case "/api/rooms/presence":
 			c.ws.roomPresence.ServeHTTP(w, r.WithContext(ctx))
 		case "/api/room-chat/messages":

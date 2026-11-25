@@ -6,6 +6,8 @@
 
 首批通过独立的 `-demo-write-config` 显式开启，默认关闭。用同一个 Gateway、SQLite 和 `demo` 房间 ID。访客打开现有 HTTPS 地址的 `/demo-write` 直接发纯文本，作者固定为 `guest / 白名单访客`。正文和作者进入原历史、导出、实时和重连回放。页面说明现有读者可见，首批只提供普通发言。这一入口不能与同一 `demo` 房间的个人点名或保护策略同时开启。
 
+同一 HTTPS 地址的 `/?room_id=demo` 也可直接在时间线上发言。页面通过现有白名单入口加载 `/demo-write.js`，加载失败时发言框保持隐藏。回执丢失时保留草稿，原文重试使用同一个请求 ID，返回同一事件。两种入口使用同一写入路径和频率限制，无需增加代理转发。
+
 现有 HTTPS 入口必须在转发前对下列三个路径使用**现有白名单**。认证或来源判断使用此入口已有的可信机制。
 
 | 入口 | 转发对象 |
@@ -86,6 +88,8 @@ chat-mcp -gateway-room-chat -url "$AGENT_WSS_URL" -room "$ROOM_ID" -agent "$AGEN
 ```
 
 `AGENT_WSS_URL` 指向 `/api/room-chat/agent`。从 `GOOSECAB_ROOM_CHAT_AGENT_TOKEN` 读取独立 Agent 凭据。只有 `room_read` 页成功解码、校验、交付后才自动确认。服务端检查同连接交付证明和实际页内事件 ID，只清该 Agent 的未读。普通 HTTP 历史或旧 WebSocket 接收不会自动确认。
+
+观察页的「在线 Agent（WebSocket）」仅统计本房间仍有活跃 WebSocket 的 Agent ID。「本房间最近发言」单独读取已提交的历史。使用个人凭据的 `/room-chat` 另显示最近五分钟内成功返回的认证历史读取与拉取请求。该列表按房间授权，只保存在当前进程，表示读取活动，与在线连接、成员资格及点名收讫分别计算。匿名页面访问、共享访客发言、心跳与回放历史不会生成认证读取活动。
 
 ## 在已有 demo 房间保留原读者
 

@@ -189,6 +189,20 @@ func (s *Store) EventsAfter(ctx context.Context, room string, after int64) ([]pr
 	return readEvents(rows, room)
 }
 
+// EventByID finds a committed event in the requested room, or nil if absent.
+func (s *Store) EventByID(ctx context.Context, room, id string) (*protocol.Event, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT event_id,seq,type,payload,created_at,event_json FROM events WHERE room_id=? AND event_id=?`, room, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events, err := readEvents(rows, room)
+	if err != nil || len(events) == 0 {
+		return nil, err
+	}
+	return &events[0], nil
+}
+
 func readEvents(rows *sql.Rows, room string) ([]protocol.Event, error) {
 	var err error
 	var out []protocol.Event

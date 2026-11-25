@@ -16,6 +16,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import urlopen
 
 from playwright.sync_api import Error, expect, sync_playwright
@@ -28,6 +29,7 @@ LEGACY_EVENT = "legacy-fixture-event"
 LEGACY_TEXT = "synthetic legacy history"
 LEGACY_REPLY = "synthetic legacy reply"
 PROTECTED_TEXT = "synthetic protected browser message"
+INLINE_TEXT = "synthetic inline demo message"
 
 
 def run(*args):
@@ -183,6 +185,9 @@ def browse(playwright, browser_home, executable, ca, origin, token, agent, frame
         target_room = LEGACY_ROOM if demo_compat else PROTECTED_ROOM
         sign_in(target_room)
         expect(page.locator("#status")).to_contain_text("fixture-writer")
+        expect(page.locator("#room-online")).to_have_text("在线 Agent（WebSocket） · " + (LEGACY_AGENT if demo_compat else "无"))
+        expect(page.locator("#recent-read-status")).to_have_text("最近 5 分钟已认证的读取")
+        expect(page.locator("#room-recent-reads")).to_contain_text("fixture-writer · 人类")
         if demo_compat:
             expect(page.locator("#legacy-audience")).to_be_visible()
             page.get_by_label("点名对象", exact=False).fill(LEGACY_AGENT)
@@ -266,7 +271,83 @@ def exercise_allowlisted_writer(playwright, executable, ca, origin):
         event = sent.value.json()
         assert event["room_id"] == LEGACY_ROOM and event["actor"] == {"kind": "guest", "id": "白名单访客"}, event
         expect(page.get_by_role("status")).to_contain_text("已发送")
-        return event
+        time.sleep(0.5)  # The same writer also serves the standalone page.
+        inline = exercise_inline_writer(browser, context, origin)
+        return event, inline
+
+
+def exercise_inline_writer(browser, context, origin):
+    denied = browser.new_context(ignore_https_errors=False)
+    denied.route(origin + "/demo-write.js", lambda route: route.fulfill(status=403))
+    denied_page = denied.new_page()
+    with denied_page.expect_response(lambda res: res.url == origin + "/demo-write.js") as blocked:
+        denied_page.goto(origin + "/?room_id=demo")
+    assert blocked.value.status == 403
+    expect(denied_page.locator("#demo-compose")).to_be_hidden()
+    denied.close()
+
+    page = context.new_page()
+
+    def small_history_page(route):
+        url = urlsplit(route.request.url)
+        query = dict(parse_qsl(url.query))
+        query["limit"] = "1"
+        route.continue_(url=urlunsplit(url._replace(query=urlencode(query))))
+
+    page.route(origin + "/api/events?*", small_history_page)
+    page.goto(origin + "/?room_id=demo")
+    form = page.locator("#demo-compose")
+    expect(form).to_be_visible()
+    expect(form.get_by_text("白名单访客", exact=False)).to_be_visible()
+    expect(page.locator(".presence")).to_contain_text("在线 Agent 1（WebSocket）")
+    more = page.get_by_role("button", name="加载更早记录")
+    more.click()
+    expect(page.locator("#shown")).to_have_text("2")
+
+    posted = []
+    write_url = origin + "/api/demo-write/messages"
+    page.on("request", lambda req: posted.append(req.post_data_json) if req.url == write_url else None)
+    page.evaluate("""() => {
+        const fetchOriginal = window.fetch;
+        window.fetch = async (...args) => {
+            const response = await fetchOriginal(...args);
+            if (args[0] === '/api/demo-write/messages') {
+                window.fetch = fetchOriginal;
+                throw new TypeError('synthetic lost receipt after commit');
+            }
+            return response;
+        };
+    }""")
+    draft = form.get_by_label("发言", exact=True)
+    draft.fill(INLINE_TEXT)
+    form.evaluate("element => { element.requestSubmit(); element.requestSubmit(); }")
+    expect(form.get_by_role("status")).to_contain_text("草稿已保留")
+    expect(draft).to_have_value(INLINE_TEXT)
+    assert len(posted) == 1, posted
+
+    room = page.get_by_label("房间 ID")
+    room.fill("other")
+    expect(form).to_be_hidden()
+    page.get_by_role("button", name="刷新记录").click()
+    expect(page.locator("#room-name")).to_have_text("other")
+    expect(form).to_be_hidden()
+    room.fill(LEGACY_ROOM)
+    expect(form).to_be_hidden()
+    page.get_by_role("button", name="刷新记录").click()
+    expect(form).to_be_visible()
+    expect(draft).to_have_value(INLINE_TEXT)
+    more.click()
+    expect(page.locator("#shown")).to_have_text("2")
+    with page.expect_response(lambda res: res.url == write_url) as retried:
+        form.get_by_role("button", name="发送").click()
+    event = retried.value.json()
+    assert retried.value.status == 201 and event["actor"] == {"kind": "guest", "id": "白名单访客"}, event
+    assert event["room_id"] == LEGACY_ROOM and len(posted) == 2 and posted[0] == posted[1], posted
+    expect(draft).to_have_value("")
+    expect(form.get_by_role("status")).to_contain_text("已发送")
+    expect(page.locator("#events").get_by_text(INLINE_TEXT, exact=True)).to_have_count(1)
+    expect(page.locator("#shown")).to_have_text("2")
+    return event
 
 
 def check_allowlisted_writer(args, ca, certificate, key):
@@ -284,18 +365,21 @@ def check_allowlisted_writer(args, ca, certificate, key):
                 frames = observe_agent(agent)
                 wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == "before-a")
                 with sync_playwright() as playwright:
-                    written = exercise_allowlisted_writer(playwright, args.chromium, ca, origin)
-                live = wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == written["event_id"])
-                assert live["payload"] == {"text": "synthetic allowlisted browser message"}
+                    standalone, inline = exercise_allowlisted_writer(playwright, args.chromium, ca, origin)
+                for written, body in [(standalone, "synthetic allowlisted browser message"), (inline, INLINE_TEXT)]:
+                    live = wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == written["event_id"])
+                    assert live["payload"] == {"text": body}
                 agent.stdin.write(f"chat {LEGACY_REPLY}\n")
                 agent.stdin.flush()
                 wait_for_legacy_frame(frames, lambda frame: frame.get("payload", {}).get("text") == LEGACY_REPLY)
                 history = legacy_history(f"{backend}/api/events/export.html?room_id={LEGACY_ROOM}")
                 assert "prior conversation" in history and "synthetic allowlisted browser message" in history
+                events = json.loads(legacy_history(f"{backend}/api/events?room_id={LEGACY_ROOM}"))["events"]
+                assert [row["event_id"] for row in events if row.get("payload", {}).get("text") == INLINE_TEXT] == [inline["event_id"]]
         finally:
             fixture.stdin.close()
             assert fixture.wait(timeout=10) == 0
-    print("PASS: Chromium posted as an allowlisted guest without a personal credential. The old Agent and export continued in demo.")
+    print("PASS: Chromium exercised inline and standalone allowlisted posting, history paging, room switching, lost-receipt retry and one committed event. The old Agent and export continued in demo.")
 
 
 def main():

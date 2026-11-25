@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -23,8 +24,13 @@ func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r 
 	defer stop()
 	expires, _ := ctx.Deadline()
 	send := func(v any) bool {
-		return ctx.Err() == nil && time.Now().Before(expires) &&
+		ok := ctx.Err() == nil && time.Now().Before(expires) &&
 			conn.SetWriteDeadline(earlierRoomChatTime(expires, time.Now().Add(5*time.Second))) == nil && conn.WriteJSON(v) == nil
+		// Only successful read replies are passed as pre-encoded JSON by roomreceipt.
+		if _, page := v.(json.RawMessage); ok && page {
+			c.activity.record(ctx, room, actor)
+		}
+		return ok
 	}
 	reject := func(code string) bool {
 		return send(map[string]string{"type": "error", "code": code, "message": "room chat operation rejected"})

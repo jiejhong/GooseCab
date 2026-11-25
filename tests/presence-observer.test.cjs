@@ -62,7 +62,7 @@ function fireTimer() {
 }
 
 (async () => {
-  assert.equal(heading.textContent, '房间在线状态');
+  assert.equal(heading.textContent, '实时连接');
   assert.equal(status.role, 'status');
   assert.equal(requests[0].url, '/api/rooms/presence?room_id=first+room');
   assert.equal(requests[0].options.cache, 'no-store');
@@ -70,14 +70,14 @@ function fireTimer() {
   const label = '本房间最近发言 ' + new Date(at).toLocaleString('zh-CN', { hour12: false });
   reply(requests[0], 'first room', [worker('<img onerror=evil>', 2)], at);
   await wait();
-  assert.equal(status.textContent, '在线 Agent 1');
+  assert.equal(status.textContent, '在线 Agent 1（WebSocket）');
   assert.equal(activity.textContent, label);
   assert.equal(list.children[0].tag, 'li');
   assert.equal(list.children[0].textContent, '<img onerror=evil> · 2 个连接 · 暂无活动');
 
   reply(fireTimer(), 'first room', [], at);
   await wait();
-  assert.equal(status.textContent, '在线 Agent 0');
+  assert.equal(status.textContent, '在线 Agent 0（WebSocket）');
   assert.equal(activity.textContent, label);
 
   fireTimer().resolve({ ok: false, status: 503 });
@@ -100,13 +100,13 @@ function fireTimer() {
   reply(old, 'first room', [worker('stale')], at);
   reply(current, 'new room', []);
   await wait();
-  assert.equal(status.textContent, '在线 Agent 0');
+  assert.equal(status.textContent, '在线 Agent 0（WebSocket）');
   assert.equal(activity.textContent, '暂无可确认时间的房间发言');
   assert.equal(list.children.length, 0);
 
   reply(fireTimer(), 'new room', [worker('current', 1, at)], at, false);
   await wait();
-  assert.equal(status.textContent, '在线 Agent 1');
+  assert.equal(status.textContent, '在线 Agent 1（WebSocket）');
   assert.equal(activity.textContent, '本房间最近发言时间暂不可用');
   assert.equal(list.children[0].textContent, 'current · 最近活跃 ' + new Date(at).toLocaleString('zh-CN', { hour12: false }));
   reply(fireTimer(), 'new room', [], 'bad timestamp');
