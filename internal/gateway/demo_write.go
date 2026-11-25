@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jiejhong/GooseCab/internal/protocol"
 )
 
@@ -103,39 +104,67 @@ func demoWriteMethod(w http.ResponseWriter, r *http.Request, method string) bool
 }
 
 func (d *demoWriter) post(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Text string `json:"text"`
+	var input struct {
+		Text      string `json:"text"`
+		RequestID string `json:"request_id,omitempty"`
 	}
-	if !readRoomChatBody(w, r, 32<<10, &body) {
+	if !readRoomChatBody(w, r, 32<<10, &input) {
 		return
 	}
-	if !validRoomChatText(body.Text, d.legacy) {
+	if !validRoomChatText(input.Text, d.legacy) {
 		http.Error(w, "invalid demo message", http.StatusBadRequest)
 		return
 	}
 	event := protocol.Event{
 		RoomID: DemoWriteRoom, Type: "chat.message",
-		Actor:   protocol.Actor{Kind: "guest", ID: "白名单访客"},
-		Payload: body,
+		Actor: protocol.Actor{Kind: "guest", ID: "白名单访客"},
+		Payload: struct {
+			Text string `json:"text"`
+		}{Text: input.Text},
+	}
+	if input.RequestID != "" {
+		id, err := uuid.Parse(input.RequestID)
+		if err != nil || id.Version() != 4 || id.String() != input.RequestID {
+			http.Error(w, "invalid demo message request ID", http.StatusBadRequest)
+			return
+		}
+		event.EventID = "demo-write-" + id.String()
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	d.mu.Lock()
+	defer d.mu.Unlock()
+	if event.EventID != "" {
+		stored, err := d.ws.Store.EventByID(ctx, DemoWriteRoom, event.EventID)
+		if err != nil {
+			http.Error(w, "demo message commit not confirmed", http.StatusServiceUnavailable)
+			return
+		}
+		if stored != nil {
+			payload, _ := stored.Payload.(map[string]any)
+			if stored.Actor != event.Actor || stored.Type != event.Type || payload["text"] != input.Text {
+				http.Error(w, "demo message request ID already used", http.StatusConflict)
+				return
+			}
+			writeDemoReceipt(w, *stored)
+			return
+		}
+	}
 	if time.Since(d.lastSend) < 500*time.Millisecond {
-		d.mu.Unlock()
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "demo write rate exceeded", http.StatusTooManyRequests)
 		return
 	}
 	err := d.ws.appendAndPublish(ctx, &event, nil, nil)
-	if err == nil {
-		d.lastSend = time.Now()
-	}
-	d.mu.Unlock()
 	if err != nil {
 		http.Error(w, "demo message commit not confirmed", http.StatusServiceUnavailable)
 		return
 	}
+	d.lastSend = time.Now()
+	writeDemoReceipt(w, event)
+}
+
+func writeDemoReceipt(w http.ResponseWriter, event protocol.Event) {
 	writeRoomChatJSON(w, http.StatusCreated, map[string]any{
 		"room_id": event.RoomID, "event_id": event.EventID, "seq": event.Seq, "actor": event.Actor,
 	})

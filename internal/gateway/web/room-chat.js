@@ -15,6 +15,9 @@ function leave(note) {
   token.value = message.value = target.value = '';
   kind.value = 'agent';
   broadcastControls.replaceChildren();
+  el('room-online').textContent = '';
+  el('recent-read-status').textContent = '';
+  el('room-recent-reads').replaceChildren();
   el('mentions').replaceChildren();
   el('events').replaceChildren();
   el('legacy-audience').hidden = true;
@@ -96,11 +99,34 @@ async function mentions(active) {
   }
 }
 
+async function activity(active) {
+  try {
+    const {online_agents: agents, recent_reads: reads} = await api(active, 'activity');
+    if (session !== active) return;
+    const rows = document.createDocumentFragment();
+    for (const {actor, at} of reads) {
+      const row = document.createElement('li');
+      row.textContent = actor.id + ' · ' + (actor.kind === 'agent' ? 'Agent' : '人类') + ' · ' +
+        new Date(at).toLocaleString('zh-CN', {hour12: false});
+      rows.append(row);
+    }
+    el('room-online').textContent = '在线 Agent（WebSocket）' + (agents.length ? ' · ' + agents.join('、') : ' · 无');
+    el('recent-read-status').textContent = reads.length ? '最近 5 分钟已认证的读取' : '最近 5 分钟暂无已认证的读取';
+    el('room-recent-reads').replaceChildren(rows);
+  } catch {
+    if (session !== active) return;
+    el('room-online').textContent = '连接与读取状态暂不可用。';
+    el('recent-read-status').textContent = '';
+    el('room-recent-reads').replaceChildren();
+  }
+}
+
 function poll(active) {
   active.timer = setTimeout(async () => {
     if (session !== active) return;
     if (!active.older) await history(active, null, true);
     if (session === active) await mentions(active);
+    if (session === active) await activity(active);
     if (session === active) poll(active);
   }, 5000);
 }
@@ -132,6 +158,7 @@ login.addEventListener('submit', async event => {
     status.textContent = active.room + ' · 人类 ' + (user.display_name || user.actor.id) + (user.write ? '' : ' · 只读');
     await history(active, null);
     if (session === active) await mentions(active);
+    if (session === active) await activity(active);
     if (session === active) poll(active);
   } catch (error) {
     if (session === active) leave(error.message);

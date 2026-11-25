@@ -45,11 +45,11 @@ func (a *HistoryAPI) Handler(next http.Handler) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		a.serve(w, r, token)
+		a.serve(w, r, nil, token)
 	})
 }
 
-func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, tokens ...string) {
+func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, onRead func(), tokens ...string) {
 	q := r.URL.Query()
 	room := q.Get("room_id")
 	if strings.TrimSpace(room) == "" || len(room) > 256 {
@@ -178,11 +178,14 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, tokens ...str
 		}
 		// Cursor is a SQLite row ID, never a potentially sensitive event ID.
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		err = json.NewEncoder(w).Encode(map[string]any{
 			"room_id": redactor.text(room), "snapshot_seq": page.SnapshotSeq,
 			"snapshot_cursor": strconv.FormatInt(page.SnapshotCursor, 10), "total": page.Total, "events": events, "has_more": page.HasMore,
 			"next_seq": nextSeq, "next_cursor": nextID, "redacted": true,
 		})
+		if err == nil && onRead != nil {
+			onRead()
+		}
 		return
 	}
 	doc := historyDocument{Room: redactor.text(room), Generated: time.Now().UTC().Format(time.RFC3339), After: anchor, Through: page.SnapshotSeq, Total: page.Total}
@@ -211,7 +214,9 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, tokens ...str
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="goosecab-chat-history.html"`)
 	w.Header().Set("Content-Security-Policy", historyCSP)
-	_, _ = w.Write(body.Bytes())
+	if _, err = w.Write(body.Bytes()); err == nil && onRead != nil {
+		onRead()
+	}
 }
 
 const historyCSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

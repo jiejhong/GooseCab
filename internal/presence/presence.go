@@ -145,6 +145,16 @@ func (t *Tracker) snapshot(room string, now time.Time) []agent {
 	return agents
 }
 
+// OnlineIDs lists Agent IDs with a live WebSocket in the given room.
+func (t *Tracker) OnlineIDs(room string, now time.Time) []string {
+	agents := t.snapshot(room, now)
+	ids := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		ids = append(ids, agent.ID)
+	}
+	return ids
+}
+
 // Watch starts presence after welcome. Call it from the socket's reader, keep
 // reading to process Pong frames, and defer closing the returned session.
 func (t *Tracker) Watch(conn *websocket.Conn, room, agent string) (*Session, error) {

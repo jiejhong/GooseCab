@@ -156,8 +156,31 @@ func TestGatewayRoomChatCompatibility(t *testing.T) {
 	}
 	const messages = "/api/room-chat/messages?room_id=demo"
 	const newHistory = "/api/room-chat/history?room_id=demo"
+	const activityPath = "/api/room-chat/activity?room_id=demo"
 	bearer := "Bearer " + fixtureLegacyToken
 	encode := func(value string) string { return "GooseCabRoom " + value }
+	type activitySnapshot struct {
+		Online []string `json:"online_agents"`
+		Recent []struct {
+			Actor protocol.Actor
+			At    time.Time
+		} `json:"recent_reads"`
+	}
+	readActivity := func() activitySnapshot {
+		t.Helper()
+		var snapshot activitySnapshot
+		body := roomChatHTTP(t, server, http.MethodGet, activityPath, encode(readerToken), "", "", 200)
+		if err := json.Unmarshal(body, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	roomChatHTTP(t, server, http.MethodGet, activityPath, "", "", "", 401)
+	roomChatHTTP(t, server, http.MethodGet, activityPath, bearer, "", "", 401)
+	roomChatHTTP(t, server, http.MethodGet, "/api/room-chat/activity?room_id=other", encode(readerToken), "", "", 401)
+	if snapshot := readActivity(); len(snapshot.Recent) != 0 {
+		t.Fatal("history, WebSocket hello, or a catalogued identity appeared as a recent authenticated read", snapshot)
+	}
 	roomChatHTTP(t, server, http.MethodPost, messages, bearer, origin, `{"text":"denied"}`, 401)
 	roomChatHTTP(t, server, http.MethodPost, messages, encode(readerToken), origin, `{"text":"denied"}`, 403)
 	roomChatHTTP(t, server, http.MethodPost, messages, encode(token), "https://unrelated.invalid", `{"text":"denied"}`, 403)
@@ -287,6 +310,28 @@ func TestGatewayRoomChatCompatibility(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), committed.EventID) || strings.Contains(output.String(), "delivery_id") {
 		t.Fatal("Agent did not get page or internal proof leaked")
+	}
+	_ = pull.Close()
+	for _, want := range []int{1, 0} {
+		if want == 0 {
+			_ = legacy.Close()
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			snapshot := readActivity()
+			if len(snapshot.Online) == want {
+				if (want == 1 && snapshot.Online[0] != agentIdentity.ID) || len(snapshot.Recent) != 2 ||
+					snapshot.Recent[0].Actor != agentIdentity || snapshot.Recent[0].At.IsZero() ||
+					snapshot.Recent[1].Actor != (protocol.Actor{Kind: "human", ID: "writer"}) {
+					t.Fatal("active WebSocket and recent authenticated reads were not kept separate", snapshot)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("wrong online count, wanted %d: %+v", want, snapshot)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	_, count, err = s.RoomChatUnread(ctx, "demo", agentIdentity, 20)
 	if err != nil || count != 1 {
