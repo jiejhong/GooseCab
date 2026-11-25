@@ -17,7 +17,10 @@ import (
 	"github.com/jiejhong/GooseCab/internal/protocol"
 )
 
-const roomChatAgentPath = "/api/room-chat/agent"
+const (
+	roomChatAgentPath  = "/api/room-chat/agent"
+	roomChatExportPath = "/api/room-chat/export.html"
+)
 
 //go:embed web/room-chat.html web/room-chat.js
 var roomChatAssets embed.FS
@@ -49,11 +52,18 @@ func NewRoomChat(ctx context.Context, ws *WS, config RoomChatConfig, legacy stri
 		return nil, errors.New("could not initialize the room chat unread table")
 	}
 	rooms := make([]string, 0, len(policy.rooms))
-	for room := range policy.rooms {
-		rooms = append(rooms, room)
+	for room, grants := range policy.rooms {
+		if !grants.legacyAudience {
+			rooms = append(rooms, room)
+		}
 	}
 	slices.Sort(rooms)
-	if err := ws.Store.ProtectRoomChat(ctx, rooms, config.RequireUnusedRooms); err != nil {
+	if len(rooms) == 0 {
+		err = ws.Store.CheckRoomChatProtection(ctx, nil)
+	} else {
+		err = ws.Store.ProtectRoomChat(ctx, rooms, config.RequireUnusedRooms)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &RoomChat{ws: ws, policy: policy, legacy: legacy, writes: make(map[roomChatWriter]time.Time)}, nil
@@ -63,8 +73,8 @@ func (c *RoomChat) ProtectedRoom(room string) bool {
 	if c == nil {
 		return false
 	}
-	_, ok := c.policy.rooms[room]
-	return ok
+	grants, ok := c.policy.rooms[room]
+	return ok && !grants.legacyAudience
 }
 
 func (c *RoomChat) Handler(next http.Handler) http.Handler {
@@ -96,7 +106,7 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		}
 		method := http.MethodGet
 		switch path {
-		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/unread", roomChatAgentPath:
+		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/unread", roomChatAgentPath, roomChatExportPath:
 		case "/api/room-chat/messages", "/api/room-chat/unread/ack":
 			method = http.MethodPost
 		default:
@@ -136,7 +146,7 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 			return
 		}
 		q, err := url.ParseQuery(r.URL.RawQuery)
-		history := path == "/api/room-chat/history" || path == "/api/events" || path == "/api/events/export.html"
+		history := path == "/api/room-chat/history" || path == roomChatExportPath || path == "/api/events" || path == "/api/events/export.html"
 		stream := path == "/ws" || path == "/api/v1/agent/connect"
 		if err != nil || len(q["room_id"]) != 1 || (!history && !stream && len(q) != 1) {
 			http.Error(w, "invalid room chat query", http.StatusBadRequest)
@@ -160,7 +170,7 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		defer cancel()
 		actor := protocol.Actor{Kind: role, ID: lease.Principal().HumanID}
 		if path == roomChatAgentPath {
-			c.serveAgentRead(ctx, w, r, room, actor, token, settings.readOnly)
+			c.serveAgentRead(ctx, w, r, room, actor, token, settings)
 			return
 		}
 		member := settings.members[actor]
@@ -171,7 +181,7 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 			return
 		}
 		if method == http.MethodPost && settings.readOnly {
-			http.Error(w, "protected room is read-only", http.StatusForbidden)
+			http.Error(w, "room chat is read-only", http.StatusForbidden)
 			return
 		}
 		ctx, cancelRequest := context.WithTimeout(ctx, 5*time.Second)
@@ -181,8 +191,8 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		case "/api/room-chat/session":
 			redact := newHistoryRedactor(c.legacy, token)
 			writeRoomChatJSON(w, http.StatusOK, map[string]any{"actor": protocol.Actor{Kind: "human", ID: redact.text(actor.ID)},
-				"display_name": redact.text(member.DisplayName), "write": member.Write && !settings.readOnly, "broadcast": member.Broadcast && !settings.readOnly, "ack": !settings.readOnly})
-		case "/api/room-chat/history", "/api/events", "/api/events/export.html":
+				"display_name": redact.text(member.DisplayName), "write": member.Write && !settings.readOnly, "broadcast": member.Broadcast && !settings.readOnly, "ack": !settings.readOnly, "legacy_audience": settings.legacyAudience})
+		case "/api/room-chat/history", roomChatExportPath, "/api/events", "/api/events/export.html":
 			(&HistoryAPI{Store: c.ws.Store}).serve(w, r, c.legacy, token)
 		case "/api/rooms/presence":
 			c.ws.roomPresence.ServeHTTP(w, r.WithContext(ctx))
@@ -220,7 +230,7 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 	var recipients []protocol.Actor
 	switch {
 	case input.MentionAll:
-		if !member.Broadcast {
+		if settings.legacyAudience || !member.Broadcast {
 			http.Error(w, "room chat broadcast denied", http.StatusForbidden)
 			return
 		}
@@ -240,6 +250,11 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 		}
 		input.Mention = &target
 		recipients = append(recipients, target)
+	}
+	// The stored event and broadcast are shared with the ordinary room.
+	// Recipient rows are committed with it and read only by identity.
+	if settings.legacyAudience {
+		input.Mention = nil
 	}
 	event := protocol.Event{RoomID: room, Actor: actor, Type: "chat.message", Payload: struct {
 		roomChatMessage

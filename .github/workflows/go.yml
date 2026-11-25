@@ -67,9 +67,16 @@ jobs:
         run: |
           git worktree add --detach "$RUNNER_TEMP/goosecab-agent-baseline" "$GOOSE_TEST_BASE"
           go build -mod=readonly -o "$RUNNER_TEMP/goosecab-gateway" ./cmd/server
+          go build -mod=readonly -o "$RUNNER_TEMP/goosecab-chat-mcp" ./cmd/chat-mcp
           go -C "$RUNNER_TEMP/goosecab-agent-baseline" build -buildvcs=false -mod=readonly \
             -o "$RUNNER_TEMP/goosecab-baseline-agent" ./cmd/agent
       - name: Exercise native same-port TLS with a trusted synthetic CA
         run: |
           python tests/gateway-native-same-port-browser.py \
             "$RUNNER_TEMP/goosecab-gateway" "$RUNNER_TEMP/goosecab-baseline-agent" --chromium "$(command -v chromium)"
+
+      - name: Exercise original demo, legacy Agent and private Chat MCP delivery
+        run: |
+          python tests/gateway-native-same-port-browser.py \
+            "$RUNNER_TEMP/goosecab-gateway" "$RUNNER_TEMP/goosecab-baseline-agent" --chromium "$(command -v chromium)" \
+            --demo-chat-mcp "$RUNNER_TEMP/goosecab-chat-mcp"

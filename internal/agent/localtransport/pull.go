@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func (c *PullClient) validLocalRoomPage(query protocol.LocalRoomReadQuery, resul
 		return false
 	}
 	if len(page.Events) == 0 {
-		return !page.HasMore && page.NextCursor == query.AfterCursor && result.Receipt == nil
+		return !page.HasMore && page.NextCursor == query.AfterCursor && result.Receipt == nil && len(page.PrivateMentionEventIDs) == 0
 	}
 	row, err := strconv.Atoi(page.NextCursor)
 	if err != nil || row < 1 || (!c.gateway && row < len(page.Events)) {
@@ -157,6 +158,18 @@ func (c *PullClient) validLocalRoomPage(query protocol.LocalRoomReadQuery, resul
 		if err != nil || (!c.gateway && row-len(page.Events) != before) ||
 			(c.gateway && page.NextSeq == query.AfterSeq && row <= before) {
 			return false
+		}
+	}
+	if ids := page.PrivateMentionEventIDs; len(ids) > 0 {
+		if !c.gateway || (result.Receipt != nil && !slices.Equal(ids, result.Receipt.EventIDs)) {
+			return false
+		}
+		seen := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if !inPage[id] || seen[id] {
+				return false
+			}
+			seen[id] = true
 		}
 	}
 	if result.Receipt == nil {

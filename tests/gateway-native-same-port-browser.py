@@ -22,6 +22,7 @@ from playwright.sync_api import Error, expect, sync_playwright
 
 
 LEGACY_ROOM = "demo"
+LEGACY_AGENT = "fixture-legacy-agent"
 PROTECTED_ROOM = "protected-fixture"
 LEGACY_EVENT = "legacy-fixture-event"
 LEGACY_TEXT = "synthetic legacy history"
@@ -122,7 +123,7 @@ def wait_for_legacy_frame(frames, predicate):
             raise AssertionError(f"Legacy Agent stream ended early: {frame}")
         assert frame["room_id"] == LEGACY_ROOM, frame
         if predicate(frame):
-            return
+            return frame
     raise AssertionError("Legacy Agent did not emit the expected frame")
 
 
@@ -144,7 +145,7 @@ def launch_chromium(playwright, browser_home, executable):
                                       env=browser_env)
 
 
-def browse(playwright, browser_home, executable, ca, origin, token, agent, frames):
+def browse(playwright, browser_home, executable, ca, origin, token, agent, frames, demo_compat):
     # An existing legacy NSS location is honored by Chromium across versions.
     nss_dir = browser_home / ".pki" / "nssdb"
     nss_dir.mkdir(parents=True)
@@ -177,24 +178,35 @@ def browse(playwright, browser_home, executable, ca, origin, token, agent, frame
             page.get_by_label("个人令牌").fill(token)
             page.get_by_role("button", name="进入房间").click()
 
-        sign_in(LEGACY_ROOM)
+        sign_in("other-fixture" if demo_compat else LEGACY_ROOM)
         expect(page.locator("#status")).to_contain_text("房间授权已失效")
-        sign_in(PROTECTED_ROOM)
+        target_room = LEGACY_ROOM if demo_compat else PROTECTED_ROOM
+        sign_in(target_room)
         expect(page.locator("#status")).to_contain_text("fixture-writer")
+        if demo_compat:
+            expect(page.locator("#legacy-audience")).to_be_visible()
+            page.get_by_label("点名对象", exact=False).fill(LEGACY_AGENT)
+        else:
+            expect(page.locator("#legacy-audience")).to_be_hidden()
         page.get_by_label("发言", exact=True).fill(PROTECTED_TEXT)
         with page.expect_response(lambda result: "/api/room-chat/messages?" in result.url) as posted:
             page.get_by_role("button", name="发送").click()
         assert posted.value.status == 201
         event = posted.value.json()
-        assert event["room_id"] == PROTECTED_ROOM and event["actor"] == {
+        assert event["room_id"] == target_room and event["actor"] == {
             "id": "fixture-writer", "kind": "human",
         }, event
         expect(page.locator("#events")).to_contain_text(PROTECTED_TEXT)
-        expect(page.locator("#events")).not_to_contain_text(LEGACY_TEXT)
+        if not demo_compat:
+            expect(page.locator("#events")).not_to_contain_text(LEGACY_TEXT)
         with page.expect_download() as exported:
             page.get_by_role("button", name="导出历史").click()
         private_export = exported.value.path().read_text(encoding="utf-8")
-        assert PROTECTED_TEXT in private_export and LEGACY_TEXT not in private_export
+        assert PROTECTED_TEXT in private_export
+        assert (LEGACY_TEXT in private_export) == demo_compat
+        if demo_compat:
+            legacy_event = wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == event["event_id"])
+            assert legacy_event["payload"] == {"text": PROTECTED_TEXT}, legacy_event
 
         # Keep the browser session and the originally connected WS Agent alive
         # together. The Agent replies to its legacy room using its old CLI.
@@ -205,8 +217,29 @@ def browse(playwright, browser_home, executable, ca, origin, token, agent, frame
             page.get_by_role("button", name="返回最新").click()
         assert refreshed.value.ok
         events = refreshed.value.json()["events"]
-        assert len(events) == 1 and events[0]["event_id"] == event["event_id"], events
-        expect(page.locator("#events")).not_to_contain_text(LEGACY_REPLY)
+        if demo_compat:
+            posted = next(row for row in events if row["event_id"] == event["event_id"])
+            assert posted["payload"] == {"text": PROTECTED_TEXT}, posted
+            assert any(row.get("payload", {}).get("text") == LEGACY_REPLY for row in events)
+        else:
+            assert len(events) == 1 and events[0]["event_id"] == event["event_id"], events
+            expect(page.locator("#events")).not_to_contain_text(LEGACY_REPLY)
+        return event
+
+
+def read_agent_page(binary, address, ca, token, after):
+    command = [str(binary.resolve()), "-gateway-room-chat", "-url",
+               f"wss://{address}/api/room-chat/agent", "-room", LEGACY_ROOM, "-agent", LEGACY_AGENT]
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    read = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        "name": "room_read", "arguments": {"after_seq": after, "limit": 1}}}
+    process = subprocess.run(command, env={"PATH": os.environ["PATH"], "SSL_CERT_FILE": str(ca),
+                                           "GOOSECAB_ROOM_CHAT_AGENT_TOKEN": token},
+                             input=json.dumps(initialize) + "\n" + json.dumps(read) + "\n",
+                             capture_output=True, text=True, timeout=10, check=True)
+    reply = json.loads(process.stdout.splitlines()[1])["result"]
+    assert not reply.get("isError"), reply
+    return json.loads(reply["content"][0]["text"])
 
 
 def main():
@@ -214,7 +247,9 @@ def main():
     parser.add_argument("gateway", type=Path)
     parser.add_argument("baseline_agent", type=Path)
     parser.add_argument("--chromium", help="Use a local executable instead of Playwright's Chromium")
+    parser.add_argument("--demo-chat-mcp", type=Path, help="Test explicit demo compatibility with this Chat MCP binary")
     args = parser.parse_args()
+    demo_compat = args.demo_chat_mcp is not None
     with tempfile.TemporaryDirectory(prefix="goosecab-native-browser-") as tmp:
         root = Path(tmp)
         ca, certificate, key = create_test_pki(root)
@@ -225,12 +260,17 @@ def main():
             address = f"127.0.0.1:{reserved.getsockname()[1]}"
         http_origin, https_origin = "http://" + address, "https://" + address
         token = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
-        config.write_text(json.dumps({"origin": https_origin, "rooms": [{
-            "id": PROTECTED_ROOM, "humans": [{
-                "id": "fixture-writer", "write": True,
-                "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
-                "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
-            }]}]}))
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        room = {"id": LEGACY_ROOM if demo_compat else PROTECTED_ROOM, "humans": [{
+            "id": "fixture-writer", "write": True, "token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+            "expires_at": expires,
+        }]}
+        if demo_compat:
+            agent_token = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+            room["legacy_readers_may_read_new_messages"] = True
+            room["agents"] = [{"id": LEGACY_AGENT, "expires_at": expires,
+                               "token_sha256": hashlib.sha256(agent_token.encode()).hexdigest()}]
+        config.write_text(json.dumps({"origin": https_origin, "rooms": [room]}))
         config.chmod(0o600)
         child_env = {"PATH": os.environ["PATH"]}
         with test_process([str(args.gateway.resolve()), "-addr", address,
@@ -239,17 +279,34 @@ def main():
                           {**child_env, "GOOSECAB_DB": str(database)}) as gateway:
             wait_for_gateway(gateway, http_origin)
             with test_process([str(args.baseline_agent.resolve()), "-mode", "interactive", "-room", LEGACY_ROOM,
-                               "-url", "ws://" + address + "/api/v1/agent/connect", "-id", "fixture-legacy-agent"],
+                               "-url", "ws://" + address + "/api/v1/agent/connect", "-id", LEGACY_AGENT],
                               child_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as agent:
                 frames = observe_agent(agent)
                 wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == LEGACY_EVENT)
                 with sync_playwright() as playwright:
-                    browse(playwright, root / "browser-home", args.chromium, ca, https_origin, token, agent, frames)
+                    written = browse(playwright, root / "browser-home", args.chromium, ca,
+                                     https_origin, token, agent, frames, demo_compat)
                 for route in ("/api/events", "/api/events/export.html"):
                     public = legacy_history(f"{http_origin}{route}?room_id={LEGACY_ROOM}")
-                    assert LEGACY_TEXT in public and LEGACY_REPLY in public and PROTECTED_TEXT not in public
-    print("PASS: Chromium rejected the untrusted server, accepted its synthetic CA, and wrote to the protected room. "
-          "The old Agent, replay, and anonymous history/export stayed in the legacy room on the same listener.")
+                    assert LEGACY_TEXT in public and LEGACY_REPLY in public
+                    assert (PROTECTED_TEXT in public) == demo_compat
+                if demo_compat:
+                    disclosed = next(row for row in json.loads(legacy_history(
+                        f"{http_origin}/api/events?room_id={LEGACY_ROOM}"))["events"]
+                        if row["event_id"] == written["event_id"])
+                    assert disclosed["payload"] == {"text": PROTECTED_TEXT}, disclosed
+                    page = read_agent_page(args.demo_chat_mcp, address, ca, agent_token, written["seq"] - 1)
+                    assert page["private_mention_event_ids"] == [written["event_id"]], page
+                    assert page["mention_receipt"] == "pending_confirmation", page
+                    page_after = read_agent_page(args.demo_chat_mcp, address, ca, agent_token, written["seq"] - 1)
+                    assert page_after["events"][0]["event_id"] == written["event_id"]
+                    assert "private_mention_event_ids" not in page_after and "mention_receipt" not in page_after, page_after
+    if demo_compat:
+        print("PASS: Chromium used verified TLS for the original demo; legacy live/history/export got plain text. "
+              "Only the separately authenticated Chat MCP obtained a personal mention and acknowledged it.")
+    else:
+        print("PASS: Chromium rejected the untrusted server, accepted its synthetic CA, and wrote to the protected room. "
+              "The old Agent, replay, and anonymous history/export stayed in the legacy room on the same listener.")
 
 
 if __name__ == "__main__":

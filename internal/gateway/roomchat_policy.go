@@ -28,10 +28,11 @@ type RoomChatConfig struct {
 }
 
 type RoomChatRoom struct {
-	ID       string           `json:"id"`
-	ReadOnly bool             `json:"read_only"`
-	Humans   []RoomChatMember `json:"humans"`
-	Agents   []RoomChatMember `json:"agents"`
+	ID                              string           `json:"id"`
+	ReadOnly                        bool             `json:"read_only"`
+	LegacyReadersMayReadNewMessages bool             `json:"legacy_readers_may_read_new_messages,omitempty"`
+	Humans                          []RoomChatMember `json:"humans"`
+	Agents                          []RoomChatMember `json:"agents"`
 }
 
 type RoomChatMember struct {
@@ -52,6 +53,7 @@ type roomChatPolicy struct {
 type roomChatGrants struct {
 	humans, agents *humanauth.Authorizer
 	readOnly       bool
+	legacyAudience bool
 	members        map[protocol.Actor]RoomChatMember
 }
 
@@ -87,7 +89,7 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 		}
 	}
 	if len(config.Rooms) == 0 || len(config.Rooms) > 64 {
-		return nil, errors.New("room chat requires 1–64 protected rooms")
+		return nil, errors.New("room chat requires 1–64 configured rooms")
 	}
 	policy := &roomChatPolicy{origin: origin, trustLoopbackProxy: config.TrustLoopbackProxy, rooms: make(map[string]roomChatGrants)}
 	digests := make(map[string]bool)
@@ -96,7 +98,7 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 		if _, exists := policy.rooms[room.ID]; exists || (legacy != "" && strings.Contains(room.ID, legacy)) || len(room.Humans) == 0 || len(room.Humans)+len(room.Agents) > 64 {
 			return nil, fmt.Errorf("invalid room chat scope at entry %d", i+1)
 		}
-		grants := roomChatGrants{readOnly: room.ReadOnly, members: make(map[protocol.Actor]RoomChatMember)}
+		grants := roomChatGrants{readOnly: room.ReadOnly, legacyAudience: room.LegacyReadersMayReadNewMessages, members: make(map[protocol.Actor]RoomChatMember)}
 		for _, group := range []struct {
 			kind    string
 			members []RoomChatMember
@@ -109,7 +111,7 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 				name := strings.TrimSpace(member.DisplayName)
 				if _, exists := grants.members[actor]; exists || (legacy != "" && (strings.Contains(member.ID, legacy) || strings.Contains(name, legacy))) || digests[digest] || len(name) > 128 || !utf8.ValidString(name) ||
 					strings.IndexFunc(name, unicode.IsControl) >= 0 ||
-					(group.kind == "agent" && member.Broadcast) || (member.Broadcast && !member.Write) {
+					(member.Broadcast && (!member.Write || group.kind == "agent" || room.LegacyReadersMayReadNewMessages)) {
 					return nil, fmt.Errorf("invalid room chat member at room %d entry %d", i+1, j+1)
 				}
 				digests[digest] = true

@@ -17,6 +17,7 @@ function leave(note) {
   broadcastControls.replaceChildren();
   el('mentions').replaceChildren();
   el('events').replaceChildren();
+  el('legacy-audience').hidden = true;
   el('room-view').hidden = true;
   el('logout').hidden = true;
   login.hidden = false;
@@ -116,6 +117,7 @@ login.addEventListener('submit', async event => {
     login.hidden = true;
     el('logout').hidden = el('room-view').hidden = false;
     compose.hidden = !user.write;
+    el('legacy-audience').hidden = !user.legacy_audience;
     active.ack = user.ack;
     el('send').disabled = false;
     broadcastControls.replaceChildren();
@@ -144,7 +146,7 @@ el('export').addEventListener('click', async () => {
   const active = session;
   if (!active) return;
   try {
-    const response = await request(active, '/api/events/export.html', {});
+    const response = await request(active, '/api/room-chat/export.html', {});
     const data = await response.blob();
     if (session !== active) return;
     const url = URL.createObjectURL(data);

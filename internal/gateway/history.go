@@ -69,7 +69,7 @@ func (a *HistoryAPI) serve(w http.ResponseWriter, r *http.Request, tokens ...str
 			return
 		}
 	}
-	isExport := r.URL.Path == "/api/events/export.html"
+	isExport := r.URL.Path == "/api/events/export.html" || r.URL.Path == roomChatExportPath
 	order := q.Get("order")
 	if q.Has("order") && (isExport || (order != "asc" && order != "desc")) {
 		http.Error(w, "invalid history order", http.StatusBadRequest)

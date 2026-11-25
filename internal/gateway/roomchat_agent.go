@@ -12,7 +12,7 @@ import (
 	"github.com/jiejhong/GooseCab/internal/roomreceipt"
 )
 
-func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r *http.Request, room string, actor protocol.Actor, token string, readOnly bool) {
+func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r *http.Request, room string, actor protocol.Actor, token string, settings roomChatGrants) {
 	upgrader := websocket.Upgrader{HandshakeTimeout: 3 * time.Second, CheckOrigin: func(r *http.Request) bool { return len(r.Header.Values("Origin")) == 0 }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -52,7 +52,7 @@ func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r 
 		func(query protocol.LocalRoomReadQuery) (protocol.LocalRoomReadReply, string) {
 			request, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			return c.agentPage(request, room, actor, token, query, readOnly)
+			return c.agentPage(request, room, actor, token, query, settings)
 		},
 		func(ids []string) error {
 			request, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -68,7 +68,7 @@ func earlierRoomChatTime(a, b time.Time) time.Time {
 	return b
 }
 
-func (c *RoomChat) agentPage(ctx context.Context, room string, actor protocol.Actor, token string, query protocol.LocalRoomReadQuery, readOnly bool) (protocol.LocalRoomReadReply, string) {
+func (c *RoomChat) agentPage(ctx context.Context, room string, actor protocol.Actor, token string, query protocol.LocalRoomReadQuery, settings roomChatGrants) (protocol.LocalRoomReadReply, string) {
 	if query.AfterSeq < 0 || query.Limit < 1 || query.Limit > protocol.LocalRoomPageLimit {
 		return protocol.LocalRoomReadReply{}, "invalid_history_range"
 	}
@@ -100,14 +100,17 @@ func (c *RoomChat) agentPage(ctx context.Context, room string, actor protocol.Ac
 		}
 	}
 	reply := protocol.LocalRoomReadReply{Type: "room.read.result", Page: page}
-	if readOnly {
+	if settings.readOnly && !settings.legacyAudience {
 		return reply, ""
 	}
 	ids, err := c.ws.Store.RoomChatPending(ctx, room, actor, eligible)
 	if err != nil {
 		return protocol.LocalRoomReadReply{}, "room_unavailable"
 	}
-	if len(ids) > 0 {
+	if settings.legacyAudience {
+		page.PrivateMentionEventIDs = ids
+	}
+	if len(ids) > 0 && !settings.readOnly {
 		reply.Receipt = &protocol.LocalRoomPageReceipt{EventIDs: ids}
 	}
 	return reply, ""
