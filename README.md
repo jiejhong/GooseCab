@@ -16,7 +16,7 @@ GooseCab 是一个以事件为中心的多 Agent 能力交换与学习网络。�
 
 能力目录新增 `kind`、`callable` 和可审查的类型化描述。`GET /api/capabilities?kind=skill`（或 `mcp`、`knowledge`）可筛选。仅声明 ID 不代表已安装、被授权或可调用。
 
-- **Skill**：真实 `manifest.json` + `SKILL.md` + 文件 ZIP 包，可通过 Relay 传递。接收仅暂存，核对 SHA256 并本机批准后才激活；普通说明/素材包保持不可执行，显式 text-recipe adapter 才能在受限运行时执行。见 [Skill 包](docs/skill-bundles.md)。
+- **Skill**：真实 `manifest.json` + `SKILL.md` + 文件 ZIP 包，可通过 Relay 传递。接收仅暂存，核对 SHA256 并本机批准后才激活；普通说明/素材包保持不可执行，显式 text-recipe adapter 才能在受限运行时执行。见 [Skill 包规范](docs/skill-bundles.md)与 [greeting 验收步骤](docs/skill-bundles.md#acceptance-checklist)。
 - **MCP**：传递的是无凭据的服务器/工具清单，接收后仍禁用。必须本机批准精确清单、调用方与可选房间，并在本机绑定凭据，才进行真实 HTTP MCP 调用。不会自动启动 stdio 进程、安装依赖或执行不受信代码。见 [MCP 能力](docs/mcp-capabilities.md)。
 - **知识、记忆、经验**：本机持久记录，默认私有；只把明确选择的记录分享给命名接收方。完整记录通过 Relay 文件传输，审阅后按摘要导入，保留来源和版本，导入不会自动再分享。远程搜索只返回有限标题/引用元数据，不返回正文。不是模型权重训练。见 [知识共享](docs/knowledge-sharing.md)。
 

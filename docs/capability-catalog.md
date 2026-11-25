@@ -31,6 +31,19 @@ mismatches and unsafe descriptor fields are rejected before event persistence.
 This intentionally tightens old unrestricted manifest announcements; migrate
 those to typed metadata. Plain legacy string hello declarations still work.
 
+## Skill worker contract
+
+The package manifest's `name` maps to `cap.skill.<name>`. Check the catalog entry
+on the intended worker for the approved version and archive SHA-256. An approved
+`text-recipe` is advertised as callable. An approved `manual` package is
+advertised as `callable:false` and cannot be executed by the worker. A catalog
+lookup is read-only. To verify both cases, follow the
+[Skill package acceptance checklist](skill-bundles.md#acceptance-checklist).
+
+For callable Skill recipes, send exactly `{"text":"..."}` with a UTF-8 string
+of at most 4096 bytes. A completed result supplies `output.text` as bounded
+`text/plain`. The greeting example accepts `" HELLO "` and returns `hello!`.
+
 `cap.text.uppercase`, learned text and skill recipes use the existing bounded
 `{"text":"..."}` input (4096 UTF-8 bytes). MCP and knowledge invocations accept
 JSON objects of at most 16 KiB. All executable kinds share the same explicit
