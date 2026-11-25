@@ -242,17 +242,79 @@ def read_agent_page(binary, address, ca, token, after):
     return json.loads(reply["content"][0]["text"])
 
 
+def exercise_allowlisted_writer(playwright, executable, ca, origin):
+    browser_home = ca.parent / "browser-home"
+    nss_dir = browser_home / ".pki" / "nssdb"
+    nss_dir.mkdir(parents=True)
+    nss_database = f"sql:{nss_dir}"
+    run("certutil", "-N", "-d", nss_database, "--empty-password")
+    run("certutil", "-A", "-d", nss_database, "-t", "C,,", "-n", "GooseCab synthetic test CA", "-i", str(ca))
+    with launch_chromium(playwright, browser_home, executable) as browser:
+        context = browser.new_context(ignore_https_errors=False)
+        context.route("**/*", lambda route: route.continue_()
+                      if route.request.url.startswith(origin + "/") else route.abort())
+        page = context.new_page()
+        response = page.goto(origin + "/demo-write", timeout=8000)
+        assert response is not None and response.ok
+        expect(page.get_by_role("heading", name="demo 房间发言")).to_be_visible()
+        expect(page.locator('input[type="password"]')).to_have_count(0)
+        expect(page.get_by_text("点名", exact=False)).to_have_count(0)
+        page.get_by_label("发言", exact=True).fill("synthetic allowlisted browser message")
+        with page.expect_response(lambda result: result.url == origin + "/api/demo-write/messages") as sent:
+            page.get_by_role("button", name="发送").click()
+        assert sent.value.status == 201 and "authorization" not in sent.value.request.all_headers()
+        event = sent.value.json()
+        assert event["room_id"] == LEGACY_ROOM and event["actor"] == {"kind": "guest", "id": "白名单访客"}, event
+        expect(page.get_by_role("status")).to_contain_text("已发送")
+        return event
+
+
+def check_allowlisted_writer(args, ca, certificate, key):
+    fixture_env = {**os.environ, "GOOSECAB_TEST_DEMO_CERT": str(certificate), "GOOSECAB_TEST_DEMO_KEY": str(key)}
+    command = [str(args.allowlisted_demo_fixture.resolve()), "-test.run=^TestDemoWriterBrowserFixture$", "-test.timeout=45s"]
+    with test_process(command, fixture_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as fixture:
+        try:
+            origin = fixture.stdout.readline().strip()
+            backend = fixture.stdout.readline().strip()
+            assert origin.startswith("https://127.0.0.1:") and backend.startswith("http://127.0.0.1:")
+            with test_process([str(args.baseline_agent.resolve()), "-mode", "interactive", "-room", LEGACY_ROOM,
+                               "-url", backend.replace("http://", "ws://", 1) + "/api/v1/agent/connect",
+                               "-id", LEGACY_AGENT], {"PATH": os.environ["PATH"]},
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE) as agent:
+                frames = observe_agent(agent)
+                wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == "before-a")
+                with sync_playwright() as playwright:
+                    written = exercise_allowlisted_writer(playwright, args.chromium, ca, origin)
+                live = wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == written["event_id"])
+                assert live["payload"] == {"text": "synthetic allowlisted browser message"}
+                agent.stdin.write(f"chat {LEGACY_REPLY}\n")
+                agent.stdin.flush()
+                wait_for_legacy_frame(frames, lambda frame: frame.get("payload", {}).get("text") == LEGACY_REPLY)
+                history = legacy_history(f"{backend}/api/events/export.html?room_id={LEGACY_ROOM}")
+                assert "prior conversation" in history and "synthetic allowlisted browser message" in history
+        finally:
+            fixture.stdin.close()
+            assert fixture.wait(timeout=10) == 0
+    print("PASS: Chromium posted as an allowlisted guest without a personal credential. The old Agent and export continued in demo.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gateway", type=Path)
     parser.add_argument("baseline_agent", type=Path)
     parser.add_argument("--chromium", help="Use a local executable instead of Playwright's Chromium")
     parser.add_argument("--demo-chat-mcp", type=Path, help="Test explicit demo compatibility with this Chat MCP binary")
+    parser.add_argument("--allowlisted-demo-fixture", type=Path, help="Exercise the Unix-backed demo writer fixture")
     args = parser.parse_args()
+    if args.demo_chat_mcp and args.allowlisted_demo_fixture:
+        parser.error("select exactly one demo mode")
     demo_compat = args.demo_chat_mcp is not None
     with tempfile.TemporaryDirectory(prefix="goosecab-native-browser-") as tmp:
         root = Path(tmp)
         ca, certificate, key = create_test_pki(root)
+        if args.allowlisted_demo_fixture:
+            check_allowlisted_writer(args, ca, certificate, key)
+            return
         database, config = root / "fixture.db", root / "room-policy.json"
         seed_legacy_history(database)
         with socket.socket() as reserved:

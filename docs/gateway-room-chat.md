@@ -2,7 +2,33 @@
 
 在现有 Gateway 上通过 `-room-chat-config` 为明确选择的房间授权网页发言。使用同一 SQLite、原事件 ID、历史字段和游标。发言与点名未读在同一事务提交，提交后发布到原事件总线。新功能默认关闭。`cmd/localroom` 和 Tailnet HTTP 隔离测试有各自的验收用途。
 
-## 启用条件
+## 首批 demo 网页发言
+
+首批通过独立的 `-demo-write-config` 显式开启，默认关闭。用同一个 Gateway、SQLite 和 `demo` 房间 ID。访客打开现有 HTTPS 地址的 `/demo-write` 直接发纯文本，作者固定为 `guest / 白名单访客`。正文和作者进入原历史、导出、实时和重连回放。页面说明现有读者可见，首批只提供普通发言。这一入口不能与同一 `demo` 房间的个人点名或保护策略同时开启。
+
+现有 HTTPS 入口必须在转发前对下列三个路径使用**现有白名单**。认证或来源判断使用此入口已有的可信机制。
+
+| 入口 | 转发对象 |
+| --- | --- |
+| `GET /demo-write` 与 `GET /demo-write.js` | 下方独立 Unix socket |
+| `POST /api/demo-write/messages` | 同一个 Unix socket |
+| 其余路径 | 当前使用的 Gateway 后端和现有规则 |
+
+入口须保留原 Host 和浏览器 Origin，且保留请求的路径和方法。转发到发言 socket 时移除 Cookie 和 Authorization。这个 socket 只提供上述发言面。Socket 的 Linux peer UID 必须与配置的入口 worker UID 一致，Gateway TCP 完全没有该路由。写入额外要求精确 HTTPS Origin、同源 JSON 与服务器固定的访客作者。部署应核实入口 UID 由现有白名单代理独占，并检查没有备用虚拟主机、路由或通用转发可以到达该 socket。若现有 HTTPS 入口无法在白名单校验后转发到独立 socket，此配置不具备启用条件。
+
+示例只包含占位值。配置权限 `0600`，socket 父目录必须由 Gateway 账号拥有，权限 `0750`，下方组应允许专用代理 worker 访问。Gateway 创建 `0660` socket，并继承目录的组。目录应置于受控的运行目录中。代理使用不同于 Gateway 的专用非 root UID。`ingress_uid` 填实际连接 socket 的 worker UID。
+
+```json
+{
+  "origin": "https://gateway.example.invalid:8312",
+  "socket": "/run/example-gateway/demo-write.sock",
+  "ingress_uid": 1234
+}
+```
+
+Gateway 启动时继续使用现有 SQLite 路径。检查旧 Agent 收发和原历史后，从已核实的 HTTPS 入口验收发言和不在名单内的拒绝。首批回退先撤掉入口的三条发言转发，再移除 `-demo-write-config` 并以同一个 SQLite 重启。已提交的访客发言与旧历史继续按原规则读取。若非正常退出留下 socket，先确认没有进程监听再由运行目录管理清理。Gateway 不会自行覆盖已有 socket。
+
+## 个人房间发言与点名的启用条件
 
 保存权限为 `0600` 的配置。继续使用现有 HTTP 监听器时，可在同一个端口选择原生 HTTPS。配置 `trust_loopback_proxy: false`，把 `origin` 设为浏览器实际使用的 HTTPS 地址，端口与当前监听地址一致，并提供当前有效、客户端信任且匹配该主机名的证书链和私钥。保留原 `-addr`，再向同一 Gateway 进程传入：
 
@@ -119,4 +145,12 @@ python tests/gateway-native-same-port-browser.py /tmp/goosecab-gateway /tmp/goos
 go build -mod=readonly -o /tmp/goosecab-chat-mcp ./cmd/chat-mcp
 python tests/gateway-native-same-port-browser.py /tmp/goosecab-gateway /tmp/goosecab-baseline-agent \
   --demo-chat-mcp /tmp/goosecab-chat-mcp
+```
+
+首批白名单发言的 Chromium 回归使用同一脚本和一个本地 Go 测试夹具。夹具走 HTTPS 白名单代理、真实 Unix socket 和原 Gateway 后端，旧 Agent 与网页同时工作。
+
+```sh
+go test -mod=readonly -c -o /tmp/goosecab-demo.test ./cmd/server
+python tests/gateway-native-same-port-browser.py /tmp/goosecab-gateway /tmp/goosecab-baseline-agent \
+  --allowlisted-demo-fixture /tmp/goosecab-demo.test
 ```
