@@ -110,10 +110,10 @@ func (s *Store) Close() error { return s.db.Close() }
 // BEGIN IMMEDIATE serializes writers even when they use different Store instances
 // pointing at the same database. The caller's event changes only after commit.
 func (s *Store) AppendNext(ctx context.Context, e *protocol.Event) error {
-	return s.appendNext(ctx, e, nil)
+	return s.appendNext(ctx, e, nil, nil)
 }
 
-func (s *Store) appendNext(ctx context.Context, e *protocol.Event, recipients []protocol.Actor) error {
+func (s *Store) appendNext(ctx context.Context, e *protocol.Event, recipients []protocol.Actor, afterInsert func(*sql.Conn, protocol.Event) error) error {
 	if e == nil {
 		return fmt.Errorf("append event: nil event")
 	}
@@ -146,6 +146,11 @@ func (s *Store) appendNext(ctx context.Context, e *protocol.Event, recipients []
 	for _, recipient := range recipients {
 		if _, err = conn.ExecContext(ctx, `INSERT INTO room_chat_unread(room_id,kind,recipient,event_id) VALUES(?,?,?,?)`,
 			next.RoomID, recipient.Kind, recipient.ID, next.EventID); err != nil {
+			return err
+		}
+	}
+	if afterInsert != nil {
+		if err = afterInsert(conn, next); err != nil {
 			return err
 		}
 	}

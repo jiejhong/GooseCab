@@ -35,3 +35,9 @@ type LocalRoomReadReply struct {
 	Page    *LocalRoomPage        `json:"page,omitempty"`
 	Receipt *LocalRoomPageReceipt `json:"receipt,omitempty"`
 }
+
+type MentionReply struct {
+	EventID   string `json:"event_id"`
+	MessageID string `json:"message_id"`
+	Text      string `json:"text"`
+}

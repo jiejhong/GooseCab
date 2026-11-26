@@ -37,8 +37,14 @@ button:disabled{opacity:.55;cursor:default}ol{padding-left:24px}li{white-space:p
 <label>点名类型 <select id="kind"><option value="agent">Agent</option><option value="human">人类</option></select></label>
 <label>点名对象 ID <input id="target" maxlength="256" autocomplete="off"></label>
 <div id="broadcast-controls"></div>
+<p id="replying" hidden></p>
+<button id="cancel-reply" type="button" hidden>取消回复</button>
 <button id="send">发送</button>
 </form>
+<section id="private-mentions" aria-label="私人点名通知" hidden>
+<h2>私人点名通知</h2>
+<ol id="private-notices"></ol>
+</section>
 <section aria-label="未读点名"><h2>未读点名 <span id="unread-count"></span></h2>
 <button id="ack" disabled>标记本页已读</button>
 <ol id="mentions"></ol>

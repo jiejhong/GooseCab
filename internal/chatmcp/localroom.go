@@ -54,3 +54,21 @@ func (r *LocalRoomReader) read(ctx context.Context, args ReadArgs) (any, error) 
 		},
 	}, nil
 }
+
+func (r *LocalRoomReader) nextMention(ctx context.Context) (any, error) {
+	reply, err := r.client.NextMention(ctx)
+	if err != nil {
+		return nil, err
+	}
+	value := struct {
+		*protocol.LocalRoomPage
+		MentionReceipt string `json:"mention_receipt,omitempty"`
+	}{LocalRoomPage: reply.Page}
+	if reply.Receipt == nil {
+		return value, nil
+	}
+	value.MentionReceipt = "pending_confirmation"
+	return deliveredRoomRead{value: value, confirm: func(ctx context.Context) error {
+		return r.client.ConfirmLocalRoomPage(ctx, *reply.Receipt)
+	}}, nil
+}

@@ -20,7 +20,7 @@ func (s *Store) EnableRoomChat(ctx context.Context) error {
 }
 
 func (s *Store) AppendRoomChat(ctx context.Context, event *protocol.Event, recipients []protocol.Actor) error {
-	return s.appendNext(ctx, event, recipients)
+	return s.appendNext(ctx, event, recipients, nil)
 }
 
 func (s *Store) RoomChatUnread(ctx context.Context, room string, actor protocol.Actor, limit int) ([]protocol.Event, int, error) {

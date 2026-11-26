@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jiejhong/GooseCab/internal/protocol"
+	"github.com/jiejhong/GooseCab/internal/store"
 )
 
 const (
@@ -26,12 +28,13 @@ const (
 var roomChatAssets embed.FS
 
 type RoomChat struct {
-	ws       *WS
-	policy   *roomChatPolicy
-	legacy   string
-	mu       sync.Mutex
-	writes   map[roomChatWriter]time.Time
-	activity roomChatActivity
+	ws         *WS
+	policy     *roomChatPolicy
+	legacy     string
+	mu         sync.Mutex
+	writes     map[roomChatWriter]time.Time
+	activity   roomChatActivity
+	mentionKey [32]byte
 }
 
 type roomChatWriter struct {
@@ -52,10 +55,21 @@ func NewRoomChat(ctx context.Context, ws *WS, config RoomChatConfig, legacy stri
 	if err := ws.Store.EnableRoomChat(ctx); err != nil {
 		return nil, errors.New("could not initialize the room chat unread table")
 	}
+	chat := &RoomChat{ws: ws, policy: policy, legacy: legacy, writes: make(map[roomChatWriter]time.Time)}
 	rooms := make([]string, 0, len(policy.rooms))
+	var tracksMentions bool
 	for room, grants := range policy.rooms {
+		tracksMentions = tracksMentions || grants.trackMentions
 		if !grants.legacyAudience {
 			rooms = append(rooms, room)
+		}
+	}
+	if tracksMentions {
+		if _, err := rand.Read(chat.mentionKey[:]); err != nil {
+			return nil, errors.New("could not initialize room mention delivery proofs")
+		}
+		if err := ws.Store.EnableTrackedMentions(ctx); err != nil {
+			return nil, errors.New("could not initialize private room mention state")
 		}
 	}
 	slices.Sort(rooms)
@@ -67,7 +81,7 @@ func NewRoomChat(ctx context.Context, ws *WS, config RoomChatConfig, legacy stri
 	if err != nil {
 		return nil, err
 	}
-	return &RoomChat{ws: ws, policy: policy, legacy: legacy, writes: make(map[roomChatWriter]time.Time)}, nil
+	return chat, nil
 }
 
 func (c *RoomChat) ProtectedRoom(room string) bool {
@@ -107,8 +121,9 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		}
 		method := http.MethodGet
 		switch path {
-		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/activity", "/api/room-chat/unread", roomChatAgentPath, roomChatExportPath:
-		case "/api/room-chat/messages", "/api/room-chat/unread/ack":
+		case "/room-chat", "/room-chat.js", "/api/room-chat/session", "/api/room-chat/history", "/api/room-chat/activity", "/api/room-chat/unread", roomChatAgentPath, roomChatExportPath,
+			"/api/room-chat/mentions", "/api/room-chat/mentions/status":
+		case "/api/room-chat/messages", "/api/room-chat/unread/ack", "/api/room-chat/mentions/ack":
 			method = http.MethodPost
 		default:
 			if !scopedLegacy {
@@ -149,7 +164,8 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		history := path == "/api/room-chat/history" || path == roomChatExportPath || path == "/api/events" || path == "/api/events/export.html"
 		stream := path == "/ws" || path == "/api/v1/agent/connect"
-		if err != nil || len(q["room_id"]) != 1 || (!history && !stream && len(q) != 1) {
+		mentionStatus := path == "/api/room-chat/mentions/status" && len(q) == 2 && len(q["event_id"]) == 1
+		if err != nil || len(q["room_id"]) != 1 || (!history && !stream && !mentionStatus && len(q) != 1) {
 			http.Error(w, "invalid room chat query", http.StatusBadRequest)
 			return
 		}
@@ -192,7 +208,8 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		case "/api/room-chat/session":
 			redact := newHistoryRedactor(c.legacy, token)
 			writeRoomChatJSON(w, http.StatusOK, map[string]any{"actor": protocol.Actor{Kind: "human", ID: redact.text(actor.ID)},
-				"display_name": redact.text(member.DisplayName), "write": member.Write && !settings.readOnly, "broadcast": member.Broadcast && !settings.readOnly, "ack": !settings.readOnly, "legacy_audience": settings.legacyAudience})
+				"display_name": redact.text(member.DisplayName), "write": member.Write && !settings.readOnly, "broadcast": member.Broadcast && !settings.readOnly, "ack": !settings.readOnly, "legacy_audience": settings.legacyAudience,
+				"track_mentions": settings.trackMentions})
 		case "/api/room-chat/history", roomChatExportPath, "/api/events", "/api/events/export.html":
 			(&HistoryAPI{Store: c.ws.Store}).serve(w, r, func() {
 				c.activity.record(ctx, room, actor)
@@ -207,6 +224,12 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 			c.unread(w, r, room, actor, token)
 		case "/api/room-chat/unread/ack":
 			c.ack(w, r, room, actor)
+		case "/api/room-chat/mentions", "/api/room-chat/mentions/status", "/api/room-chat/mentions/ack":
+			if !settings.trackMentions {
+				http.NotFound(w, r)
+				return
+			}
+			c.serveMentionHTTP(w, r, room, actor, token)
 		}
 	})
 }
@@ -215,6 +238,7 @@ type roomChatMessage struct {
 	Text       string          `json:"text"`
 	Mention    *protocol.Actor `json:"mention,omitempty"`
 	MentionAll bool            `json:"mention_all,omitempty"`
+	ReplyTo    string          `json:"reply_to_event_id,omitempty"`
 }
 
 func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, actor protocol.Actor, settings roomChatGrants, token string) {
@@ -229,6 +253,10 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 	}
 	if !validRoomChatText(input.Text, c.legacy, token) || (input.Mention != nil && input.MentionAll) {
 		http.Error(w, "invalid room chat message", http.StatusBadRequest)
+		return
+	}
+	if input.ReplyTo != "" && (!settings.trackMentions || !validMentionID(input.ReplyTo) || input.Mention != nil || input.MentionAll) {
+		http.Error(w, "invalid mention reply", http.StatusBadRequest)
 		return
 	}
 	now := time.Now()
@@ -258,8 +286,14 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 	}
 	// The stored event and broadcast are shared with the ordinary room.
 	// Recipient rows are committed with it and read only by identity.
-	if settings.legacyAudience {
+	sendsMention := input.Mention != nil || input.MentionAll
+	replyTo := input.ReplyTo
+	if settings.legacyAudience || settings.trackMentions {
 		input.Mention = nil
+	}
+	if settings.trackMentions {
+		input.MentionAll = false
+		input.ReplyTo = ""
 	}
 	event := protocol.Event{RoomID: room, Actor: actor, Type: "chat.message", Payload: struct {
 		roomChatMessage
@@ -273,11 +307,27 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 		http.Error(w, "room chat write rate exceeded", http.StatusTooManyRequests)
 		return
 	}
-	err := c.ws.appendAndPublish(r.Context(), &event, recipients, nil)
+	var err error
+	if settings.trackMentions {
+		now = time.Now()
+		recipients = slices.DeleteFunc(recipients, func(target protocol.Actor) bool { return !now.Before(settings.members[target].ExpiresAt) })
+		if len(recipients) == 0 && sendsMention {
+			c.mu.Unlock()
+			http.Error(w, "no eligible mention recipient", http.StatusBadRequest)
+			return
+		}
+		err = c.appendTrackedMention(r.Context(), &event, recipients, replyTo)
+	} else {
+		err = c.ws.appendAndPublish(r.Context(), &event, recipients, nil)
+	}
 	if err == nil {
 		c.writes[writer] = now
 	}
 	c.mu.Unlock()
+	if errors.Is(err, store.ErrMentionReply) {
+		http.Error(w, "no received mention for this room member", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		http.Error(w, "room chat commit not confirmed", http.StatusServiceUnavailable)
 		return

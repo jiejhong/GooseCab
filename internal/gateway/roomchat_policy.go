@@ -31,6 +31,7 @@ type RoomChatRoom struct {
 	ID                              string           `json:"id"`
 	ReadOnly                        bool             `json:"read_only"`
 	LegacyReadersMayReadNewMessages bool             `json:"legacy_readers_may_read_new_messages,omitempty"`
+	TrackMentionReceipts            bool             `json:"track_mention_receipts,omitempty"`
 	Humans                          []RoomChatMember `json:"humans"`
 	Agents                          []RoomChatMember `json:"agents"`
 }
@@ -54,6 +55,7 @@ type roomChatGrants struct {
 	humans, agents *humanauth.Authorizer
 	readOnly       bool
 	legacyAudience bool
+	trackMentions  bool
 	members        map[protocol.Actor]RoomChatMember
 }
 
@@ -95,10 +97,12 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 	digests := make(map[string]bool)
 	reserved := humanauth.ReservedDigests{Shared: sha256.Sum256([]byte(legacy))}
 	for i, room := range config.Rooms {
-		if _, exists := policy.rooms[room.ID]; exists || (legacy != "" && strings.Contains(room.ID, legacy)) || len(room.Humans) == 0 || len(room.Humans)+len(room.Agents) > 64 {
+		if _, exists := policy.rooms[room.ID]; exists || (legacy != "" && strings.Contains(room.ID, legacy)) || len(room.Humans) == 0 || len(room.Humans)+len(room.Agents) > 64 ||
+			(room.TrackMentionReceipts && room.LegacyReadersMayReadNewMessages) {
 			return nil, fmt.Errorf("invalid room chat scope at entry %d", i+1)
 		}
 		grants := roomChatGrants{readOnly: room.ReadOnly, legacyAudience: room.LegacyReadersMayReadNewMessages, members: make(map[protocol.Actor]RoomChatMember)}
+		grants.trackMentions = room.TrackMentionReceipts
 		for _, group := range []struct {
 			kind    string
 			members []RoomChatMember
