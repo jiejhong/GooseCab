@@ -209,6 +209,14 @@ func (b *GatewayBackend) Read(ctx context.Context, a ReadArgs) (any, error) {
 	}
 	return b.get(ctx, "/api/events", q)
 }
+
+func (b *GatewayBackend) MentionStatus(ctx context.Context, eventID string) (any, error) {
+	if !b.client.AgentMentionPosts() {
+		return nil, errors.New("mention status is unavailable in this room client")
+	}
+	q := url.Values{"room_id": {b.config.Room}, "event_id": {eventID}}
+	return b.get(ctx, "/api/room-chat/mentions/status", q)
+}
 func (b *GatewayBackend) Discover(ctx context.Context, a DiscoverArgs) (any, error) {
 	q := url.Values{}
 	if a.Query != "" {

@@ -32,6 +32,7 @@ type RoomChatRoom struct {
 	ReadOnly                        bool             `json:"read_only"`
 	LegacyReadersMayReadNewMessages bool             `json:"legacy_readers_may_read_new_messages,omitempty"`
 	TrackMentionReceipts            bool             `json:"track_mention_receipts,omitempty"`
+	AgentMentionPosts               bool             `json:"agent_mention_posts,omitempty"`
 	Humans                          []RoomChatMember `json:"humans"`
 	Agents                          []RoomChatMember `json:"agents"`
 }
@@ -56,6 +57,7 @@ type roomChatGrants struct {
 	readOnly       bool
 	legacyAudience bool
 	trackMentions  bool
+	agentPosts     bool
 	members        map[protocol.Actor]RoomChatMember
 }
 
@@ -98,11 +100,13 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 	reserved := humanauth.ReservedDigests{Shared: sha256.Sum256([]byte(legacy))}
 	for i, room := range config.Rooms {
 		if _, exists := policy.rooms[room.ID]; exists || (legacy != "" && strings.Contains(room.ID, legacy)) || len(room.Humans) == 0 || len(room.Humans)+len(room.Agents) > 64 ||
-			(room.TrackMentionReceipts && room.LegacyReadersMayReadNewMessages) {
+			(room.TrackMentionReceipts && room.LegacyReadersMayReadNewMessages) ||
+			(room.AgentMentionPosts && !room.TrackMentionReceipts) {
 			return nil, fmt.Errorf("invalid room chat scope at entry %d", i+1)
 		}
 		grants := roomChatGrants{readOnly: room.ReadOnly, legacyAudience: room.LegacyReadersMayReadNewMessages, members: make(map[protocol.Actor]RoomChatMember)}
 		grants.trackMentions = room.TrackMentionReceipts
+		grants.agentPosts = room.AgentMentionPosts
 		for _, group := range []struct {
 			kind    string
 			members []RoomChatMember
@@ -115,7 +119,7 @@ func newRoomChatPolicy(config RoomChatConfig, legacy string) (*roomChatPolicy, e
 				name := strings.TrimSpace(member.DisplayName)
 				if _, exists := grants.members[actor]; exists || (legacy != "" && (strings.Contains(member.ID, legacy) || strings.Contains(name, legacy))) || digests[digest] || len(name) > 128 || !utf8.ValidString(name) ||
 					strings.IndexFunc(name, unicode.IsControl) >= 0 ||
-					(member.Broadcast && (!member.Write || group.kind == "agent" || room.LegacyReadersMayReadNewMessages)) {
+					(member.Broadcast && (!member.Write || (group.kind == "agent" && !room.AgentMentionPosts) || room.LegacyReadersMayReadNewMessages)) {
 					return nil, fmt.Errorf("invalid room chat member at room %d entry %d", i+1, j+1)
 				}
 				digests[digest] = true

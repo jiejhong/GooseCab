@@ -41,3 +41,17 @@ type MentionReply struct {
 	MessageID string `json:"message_id"`
 	Text      string `json:"text"`
 }
+
+// ValidMentionEventID accepts generated UUIDs and stable, agent-prefixed
+// message IDs without whitespace or input that has to be escaped in a room URL.
+func ValidMentionEventID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '.' && c != '-' && c != '_' && c != ':' {
+			return false
+		}
+	}
+	return true
+}
