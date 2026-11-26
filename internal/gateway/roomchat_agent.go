@@ -26,8 +26,8 @@ func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r 
 	send := func(v any) bool {
 		ok := ctx.Err() == nil && time.Now().Before(expires) &&
 			conn.SetWriteDeadline(earlierRoomChatTime(expires, time.Now().Add(5*time.Second))) == nil && conn.WriteJSON(v) == nil
-		// Only successful read replies are passed as pre-encoded JSON by roomreceipt.
-		if _, page := v.(json.RawMessage); ok && page {
+		// Count ordinary authenticated reads separately from mention delivery.
+		if wire, page := v.(json.RawMessage); ok && page && bytes.HasPrefix(wire, []byte(`{"type":"room.read.result"`)) {
 			c.activity.record(ctx, room, actor)
 		}
 		return ok
@@ -54,6 +54,28 @@ func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r 
 		!send(map[string]string{"type": "agent.welcome", "agent_id": actor.ID, "room_id": room, "mode": protocol.LocalRoomPullMode}) {
 		return
 	}
+	var mentions *roomreceipt.MentionCommands
+	if settings.trackMentions && !settings.readOnly {
+		mentions = &roomreceipt.MentionCommands{
+			Next: func() (protocol.LocalRoomReadReply, string) {
+				request, cancel := context.WithTimeout(ctx, 4*time.Second)
+				defer cancel()
+				return c.nextAgentMention(request, room, actor, token)
+			},
+			Ack: func(id string) error {
+				request, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				return c.ws.Store.ConfirmMention(request, room, actor, id)
+			},
+		}
+		if settings.members[actor].Write {
+			mentions.Reply = func(input protocol.MentionReply) (protocol.Event, string) {
+				request, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				return c.agentMentionReply(request, room, actor, token, input)
+			}
+		}
+	}
 	roomreceipt.Serve(ctx, conn, send, reject,
 		func(query protocol.LocalRoomReadQuery) (protocol.LocalRoomReadReply, string) {
 			request, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -64,7 +86,7 @@ func (c *RoomChat) serveAgentRead(ctx context.Context, w http.ResponseWriter, r 
 			request, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			return c.ws.Store.AcknowledgeRoomChat(request, room, actor, ids)
-		})
+		}, mentions)
 }
 
 func earlierRoomChatTime(a, b time.Time) time.Time {

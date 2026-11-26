@@ -110,7 +110,8 @@ func (c *PullClient) localRoomExchange(ctx context.Context, request, response an
 		// Only errors understood by the client are printed. Frames and
 		// delivery proofs stay out of diagnostics.
 		switch header.Code {
-		case "invalid_history_cursor", "invalid_history_range", "room_unavailable", "page_too_large", "unconfirmed_delivery", "ack_failed":
+		case "invalid_history_cursor", "invalid_history_range", "room_unavailable", "page_too_large", "unconfirmed_delivery", "ack_failed",
+			"invalid_mention_reply", "mention_reply_not_committed":
 			return "", fmt.Errorf("isolated Agent operation rejected (%s)", header.Code)
 		default:
 			return "", errors.New("isolated Agent operation rejected")

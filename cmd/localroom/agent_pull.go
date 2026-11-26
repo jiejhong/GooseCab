@@ -23,7 +23,7 @@ func (s *roomServer) serveAgentPull(ctx context.Context, conn *websocket.Conn, a
 				return errors.New("acknowledgement failed")
 			}
 			return nil
-		})
+		}, nil)
 }
 
 func (s *roomServer) agentReadPage(actor protocol.Actor, read protocol.LocalRoomReadQuery) (protocol.LocalRoomReadReply, string) {

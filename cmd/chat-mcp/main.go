@@ -17,6 +17,7 @@ func main() {
 	id := flag.String("agent", "", "fixed agent ID")
 	localRoom := flag.Bool("local-room", false, "use room_read with an isolated loopback Agent")
 	gatewayRoom := flag.Bool("gateway-room-chat", false, "use independently authenticated Gateway room_read")
+	mentions := flag.Bool("gateway-mentions", false, "expose private notice and reply tools for an opted-in protected Gateway room")
 	root := flag.String("skill-root", "", "existing independently approved local skill store (disabled by default)")
 	cap := flag.String("skill-capability", "", "exact approved capability")
 	version := flag.Int("skill-version", 0, "exact approved version")
@@ -24,6 +25,10 @@ func main() {
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if *mentions && !*gatewayRoom {
+		fmt.Fprintln(os.Stderr, "gateway-mentions requires independently authenticated gateway-room-chat")
+		os.Exit(1)
+	}
 	if *localRoom || *gatewayRoom {
 		if *localRoom && *gatewayRoom {
 			fmt.Fprintln(os.Stderr, "select exactly one room transport")
@@ -33,7 +38,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "isolated room_read cannot enable a pinned skill")
 			os.Exit(1)
 		}
-		if err := serveLocalRoom(ctx, *endpoint, *room, *id, *gatewayRoom); err != nil {
+		if err := serveLocalRoom(ctx, *endpoint, *room, *id, *gatewayRoom, *mentions); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -62,7 +67,7 @@ func main() {
 	}
 }
 
-func serveLocalRoom(ctx context.Context, endpoint, room, id string, gateway bool) error {
+func serveLocalRoom(ctx context.Context, endpoint, room, id string, gateway, mentions bool) error {
 	connect, env := chatmcp.ConnectLocalRoom, "GOOSECAB_LOCALROOM_AGENT_TOKEN"
 	if gateway {
 		connect, env = chatmcp.ConnectGatewayRoom, "GOOSECAB_ROOM_CHAT_AGENT_TOKEN"
@@ -72,5 +77,5 @@ func serveLocalRoom(ctx context.Context, endpoint, room, id string, gateway bool
 		return err
 	}
 	defer reader.Close()
-	return (&chatmcp.Server{LocalRoom: reader}).Serve(ctx, os.Stdin, os.Stdout)
+	return (&chatmcp.Server{LocalRoom: reader, Mentions: mentions}).Serve(ctx, os.Stdin, os.Stdout)
 }

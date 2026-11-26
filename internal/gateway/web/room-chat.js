@@ -15,6 +15,9 @@ function leave(note) {
   token.value = message.value = target.value = '';
   kind.value = 'agent';
   broadcastControls.replaceChildren();
+  el('private-mentions').hidden = true;
+  el('private-notices').replaceChildren();
+  setReply(undefined);
   el('room-online').textContent = '';
   el('recent-read-status').textContent = '';
   el('room-recent-reads').replaceChildren();
@@ -57,9 +60,84 @@ function showEvents(id, events) {
     const mention = payload.mention_all ? ' · 全员点名' : payload.mention ? ' · 点名 ' + payload.mention.id : '';
     row.textContent = author + (actor.id && author !== actor.id ? '（' + actor.id + '）' : '') +
       ' · #' + event.seq + ' · ' + String(body) + mention;
+    if (id === 'events' && session?.trackMentions && session.actor.id === actor.id && session.actor.kind === actor.kind &&
+        /^[0-9a-f-]{36}$/.test(event.event_id)) {
+      const active = session;
+      const check = document.createElement('button');
+      check.type = 'button';
+      check.textContent = '查看点名回执';
+      const view = document.createElement('span');
+      view.dataset.mentionStatus = event.event_id;
+      view.textContent = active.receipts.get(event.event_id) || '';
+      check.addEventListener('click', async () => {
+        try {
+          const {recipients} = await api(active, 'mentions/status', {event_id: event.event_id});
+          if (session !== active) return;
+          const labels = {pending: '待送达', received: '已收到', replied: '已回复'};
+          view.textContent = recipients.length ? recipients.map(result =>
+            result.recipient.id + '（' + (result.recipient.kind === 'agent' ? 'Agent' : '人类') + '）' + labels[result.state]).join('、') : '无点名回执';
+          active.receipts.set(event.event_id, view.textContent);
+          const current = el('events').querySelector('[data-mention-status="' + event.event_id + '"]');
+          if (current) current.textContent = view.textContent;
+        } catch (error) {
+          if (session === active) view.textContent = error.message;
+        }
+      });
+      row.append(' ', check, ' ', view);
+    }
     list.append(row);
   }
   el(id).replaceChildren(list);
+}
+
+function setReply(id) {
+  if (session) session.replyTo = id;
+  el('replying').hidden = el('cancel-reply').hidden = !id;
+  el('replying').textContent = id ? '回复点名 ' + id : '';
+}
+
+el('cancel-reply').addEventListener('click', () => setReply(undefined));
+
+async function privateMentions(active) {
+  if (!active.trackMentions) return;
+  const list = el('private-notices');
+  try {
+    const {items} = await api(active, 'mentions');
+    if (session !== active) return;
+    const rows = document.createDocumentFragment();
+    for (const {event, proof} of items) {
+      const row = document.createElement('li');
+      row.textContent = (event.actor?.id || '成员') + ' · ' + String(event.payload?.text || '');
+      const controls = active.write ? [['确认收到', false], ['确认收到并回复', true]] : [['确认收到', false]];
+      for (const [label, reply] of controls) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.disabled = !active.ack;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await api(active, 'mentions/ack', {}, {event_id: event.event_id, proof});
+            if (session !== active) return;
+            if (reply) {
+              setReply(event.event_id);
+              message.focus();
+            }
+            await privateMentions(active);
+          } catch (error) {
+            if (session === active) status.textContent = error.message;
+          } finally {
+            button.disabled = !active.ack;
+          }
+        });
+        row.append(' ', button);
+      }
+      rows.append(row);
+    }
+    list.replaceChildren(rows);
+  } catch (error) {
+    if (session === active) status.textContent = error.message;
+  }
 }
 
 async function history(active, before, passive = false) {
@@ -127,6 +205,7 @@ function poll(active) {
     if (!active.older) await history(active, null, true);
     if (session === active) await mentions(active);
     if (session === active) await activity(active);
+    if (session === active) await privateMentions(active);
     if (session === active) poll(active);
   }, 5000);
 }
@@ -145,6 +224,11 @@ login.addEventListener('submit', async event => {
     compose.hidden = !user.write;
     el('legacy-audience').hidden = !user.legacy_audience;
     active.ack = user.ack;
+    active.actor = user.actor;
+    active.trackMentions = user.track_mentions;
+    active.write = user.write;
+    active.receipts = new Map();
+    el('private-mentions').hidden = !active.trackMentions;
     el('send').disabled = false;
     broadcastControls.replaceChildren();
     if (user.broadcast) {
@@ -159,6 +243,7 @@ login.addEventListener('submit', async event => {
     await history(active, null);
     if (session === active) await mentions(active);
     if (session === active) await activity(active);
+    if (session === active) await privateMentions(active);
     if (session === active) poll(active);
   } catch (error) {
     if (session === active) leave(error.message);
@@ -204,7 +289,8 @@ compose.addEventListener('submit', async event => {
   const active = session;
   if (!active || el('send').disabled) return;
   const body = {text: message.value};
-  if (active.broadcast?.checked) body.mention_all = true;
+  if (active.replyTo) body.reply_to_event_id = active.replyTo;
+  else if (active.broadcast?.checked) body.mention_all = true;
   else if (target.value.trim()) body.mention = {kind: kind.value, id: target.value.trim()};
   el('send').disabled = true;
   try {
@@ -212,6 +298,7 @@ compose.addEventListener('submit', async event => {
     if (session !== active) return;
     message.value = target.value = '';
     if (active.broadcast) active.broadcast.checked = false;
+    setReply(undefined);
     status.textContent = '已保存发言 #' + result.seq + '。';
     await history(active, null);
   } catch (error) {

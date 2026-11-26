@@ -147,7 +147,7 @@ def launch_chromium(playwright, browser_home, executable):
                                       env=browser_env)
 
 
-def browse(playwright, browser_home, executable, ca, origin, token, agent, frames, demo_compat):
+def browse(playwright, browser_home, executable, ca, origin, token, agent, frames, demo_compat, recipient_token):
     # An existing legacy NSS location is honored by Chromium across versions.
     nss_dir = browser_home / ".pki" / "nssdb"
     nss_dir.mkdir(parents=True)
@@ -229,7 +229,40 @@ def browse(playwright, browser_home, executable, ca, origin, token, agent, frame
         else:
             assert len(events) == 1 and events[0]["event_id"] == event["event_id"], events
             expect(page.locator("#events")).not_to_contain_text(LEGACY_REPLY)
+            check_private_mention_browser(context, page, origin, recipient_token)
         return event
+
+
+def check_private_mention_browser(context, sender, origin, recipient_token):
+    recipient = context.new_page()
+    recipient.goto(origin + "/room-chat")
+    recipient.get_by_label("房间 ID").fill(PROTECTED_ROOM)
+    recipient.get_by_label("个人令牌").fill(recipient_token)
+    recipient.get_by_role("button", name="进入房间").click()
+    expect(recipient.locator("#status")).to_contain_text("fixture-recipient")
+    expect(recipient.locator("#private-notices li")).to_have_count(0)
+    time.sleep(0.5)
+    sender.get_by_label("点名类型").select_option("human")
+    sender.get_by_label("点名对象", exact=False).fill("fixture-recipient")
+    sender.get_by_label("发言", exact=True).fill("private mention browser fixture")
+    sender.get_by_role("button", name="发送", exact=True).click()
+    original = sender.locator("#events li").filter(has_text="private mention browser fixture")
+    receipt = original.get_by_role("button", name="查看点名回执")
+    receipt.click()
+    expect(original).to_contain_text("fixture-recipient（人类）待送达")
+    notice = recipient.locator("#private-notices li").filter(has_text="private mention browser fixture")
+    notice.get_by_role("button", name="确认收到并回复").click()
+    expect(recipient.locator("#replying")).to_be_visible()
+    receipt.click()
+    expect(original).to_contain_text("fixture-recipient（人类）已收到")
+    recipient.get_by_label("发言", exact=True).fill("browser reply fixture")
+    recipient.get_by_role("button", name="发送", exact=True).click()
+    expect(recipient.locator("#events")).to_contain_text("browser reply fixture")
+    receipt.click()
+    expect(original).to_contain_text("fixture-recipient（人类）已回复")
+    expect(recipient.locator("#private-notices li")).to_have_count(0)
+    assert context.new_page().goto(origin + "/api/room-chat/mentions?room_id=" + PROTECTED_ROOM).status == 401
+    print("PASS: Chromium sent a protected mention, showed each receipt stage, and replied as the authenticated recipient.")
 
 
 def read_agent_page(binary, address, ca, token, after):
@@ -416,6 +449,14 @@ def main():
             room["legacy_readers_may_read_new_messages"] = True
             room["agents"] = [{"id": LEGACY_AGENT, "expires_at": expires,
                                "token_sha256": hashlib.sha256(agent_token.encode()).hexdigest()}]
+            recipient_token = None
+        else:
+            recipient_token = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+            room["track_mention_receipts"] = True
+            room["humans"].append({
+                "id": "fixture-recipient", "write": True, "expires_at": expires,
+                "token_sha256": hashlib.sha256(recipient_token.encode()).hexdigest(),
+            })
         config.write_text(json.dumps({"origin": https_origin, "rooms": [room]}))
         config.chmod(0o600)
         child_env = {"PATH": os.environ["PATH"]}
@@ -431,7 +472,7 @@ def main():
                 wait_for_legacy_frame(frames, lambda frame: frame.get("event_id") == LEGACY_EVENT)
                 with sync_playwright() as playwright:
                     written = browse(playwright, root / "browser-home", args.chromium, ca,
-                                     https_origin, token, agent, frames, demo_compat)
+                                     https_origin, token, agent, frames, demo_compat, recipient_token)
                 for route in ("/api/events", "/api/events/export.html"):
                     public = legacy_history(f"{http_origin}{route}?room_id={LEGACY_ROOM}")
                     assert LEGACY_TEXT in public and LEGACY_REPLY in public
