@@ -172,7 +172,8 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		room := q.Get("room_id")
 		settings, enabled := c.policy.rooms[room]
 		scheme, role, authorizer := "GooseCabRoom", "human", settings.humans
-		if path == "/api/v1/agent/connect" || (path == "/api/events" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")) {
+		if path == "/api/v1/agent/connect" ||
+			((path == "/api/events" || (mentionStatus && settings.agentPosts)) && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")) {
 			scheme, role, authorizer = "Bearer", "agent", settings.agents
 		} else if path == roomChatAgentPath {
 			role, authorizer = "agent", settings.agents
@@ -194,6 +195,12 @@ func (c *RoomChat) Handler(next http.Handler) http.Handler {
 		if stream {
 			access := roomWebSocketAccess{agentID: actor.ID, write: role == "agent" && member.Write && !settings.readOnly,
 				redact: newHistoryRedactor(c.legacy, token)}
+			if access.write && settings.agentPosts {
+				access.postChat = func(ctx context.Context, event *protocol.Event, text string) (bool, error) {
+					event.RoomID, event.Actor = room, actor
+					return c.postAgentRoomChat(ctx, event, text, settings, access.redact)
+				}
+			}
 			c.ws.serveRoomSocket(w, r.WithContext(ctx), &access)
 			return
 		}
@@ -255,7 +262,7 @@ func (c *RoomChat) post(w http.ResponseWriter, r *http.Request, room string, act
 		http.Error(w, "invalid room chat message", http.StatusBadRequest)
 		return
 	}
-	if input.ReplyTo != "" && (!settings.trackMentions || !validMentionID(input.ReplyTo) || input.Mention != nil || input.MentionAll) {
+	if input.ReplyTo != "" && (!settings.trackMentions || !protocol.ValidMentionEventID(input.ReplyTo) || input.Mention != nil || input.MentionAll) {
 		http.Error(w, "invalid mention reply", http.StatusBadRequest)
 		return
 	}

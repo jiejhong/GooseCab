@@ -66,9 +66,10 @@ func (w *WS) Handler(next http.Handler) http.Handler {
 }
 
 type roomWebSocketAccess struct {
-	agentID string
-	write   bool
-	redact  historyRedactor
+	agentID  string
+	write    bool
+	redact   historyRedactor
+	postChat func(context.Context, *protocol.Event, string) (bool, error)
 }
 
 func (w *WS) serveRoomSocket(rw http.ResponseWriter, r *http.Request, access *roomWebSocketAccess) {
@@ -251,7 +252,11 @@ func (w *WS) serveRoomSocket(rw http.ResponseWriter, r *http.Request, access *ro
 				agentID = ""
 				continue
 			}
-			if writeJSON(map[string]any{"type": "agent.welcome", "resume_from": after, "room_id": room}) != nil {
+			welcome := map[string]any{"type": "agent.welcome", "resume_from": after, "room_id": room}
+			if access != nil && access.postChat != nil {
+				welcome["agent_mention_posts"] = true
+			}
+			if writeJSON(welcome) != nil {
 				return
 			}
 			watched, err := w.roomPresence.Watch(c, room, agentID)
@@ -351,6 +356,22 @@ func (w *WS) serveRoomSocket(rw http.ResponseWriter, r *http.Request, access *ro
 				if evt.Type != "chat.message" || json.Unmarshal(payload, &input) != nil ||
 					!validRoomChatText(input.Text, access.redact.tokens...) {
 					reject("invalid_event", "protected room Agent chat requires bounded text")
+					continue
+				}
+				if access.postChat != nil {
+					event := protocol.Event{EventID: evt.EventID, Type: "chat.message", Payload: map[string]any{"text": input.Text},
+						CausationID: evt.CausationID}
+					fresh, err := access.postChat(r.Context(), &event, input.Text)
+					if err != nil {
+						reject("persist_failed", "unable to save Agent chat event")
+					} else if !fresh {
+						// Only this authenticated sender gets an echo of the existing commit.
+						if writeJSON(event) != nil {
+							return
+						}
+					} else {
+						session.RecordActivity()
+					}
 					continue
 				}
 				evt = protocol.Event{Type: "chat.message", Payload: input}

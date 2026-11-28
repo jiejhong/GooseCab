@@ -31,10 +31,11 @@ const (
 // Client is a minimal outbound Agent Node connection. It never exposes an
 // inbound port.
 type Client struct {
-	Conn      *websocket.Conn
-	AgentID   string
-	RoomID    string
-	localRoom bool
+	Conn              *websocket.Conn
+	AgentID           string
+	RoomID            string
+	localRoom         bool
+	agentMentionPosts bool
 
 	writeMu   sync.Mutex
 	pendingMu sync.Mutex
@@ -139,6 +140,7 @@ func dial(ctx context.Context, url, room, id string, caps []string, token string
 			return nil, &ProtocolError{Code: code, Message: message}
 		}
 		if typ, _ := msg["type"].(string); typ == "agent.welcome" {
+			x.agentMentionPosts, _ = msg["agent_mention_posts"].(bool)
 			break
 		}
 		x.queue(msg)
@@ -153,6 +155,8 @@ func dial(ctx context.Context, url, room, id string, caps []string, token string
 	}
 	return x, nil
 }
+
+func (c *Client) AgentMentionPosts() bool { return c.agentMentionPosts }
 
 // urlpkg adds room_id without discarding query parameters supplied by a
 // reverse proxy or deployment. It also escapes room IDs containing spaces or

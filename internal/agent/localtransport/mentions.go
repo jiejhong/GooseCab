@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/jiejhong/GooseCab/internal/protocol"
 )
 
@@ -31,8 +30,7 @@ func (c *PullClient) validMention(result protocol.LocalRoomReadReply) bool {
 		return result.Receipt == nil
 	}
 	event := page.Events[0]
-	id, err := uuid.Parse(event.EventID)
-	if err != nil || id.String() != event.EventID || event.RoomID != c.room || event.Type != "chat.message" ||
+	if !protocol.ValidMentionEventID(event.EventID) || event.RoomID != c.room || event.Type != "chat.message" ||
 		event.Seq < 1 || result.Receipt == nil || len(result.Receipt.EventIDs) != 1 ||
 		result.Receipt.EventIDs[0] != event.EventID {
 		return false

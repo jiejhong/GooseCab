@@ -16,11 +16,6 @@ import (
 
 const mentionProofLifetime = 90 * time.Second
 
-func validMentionID(id string) bool {
-	parsed, err := uuid.Parse(id)
-	return err == nil && parsed.String() == id
-}
-
 func (c *RoomChat) appendTrackedMention(ctx context.Context, event *protocol.Event, recipients []protocol.Actor, replyTo string) error {
 	c.ws.eventMu.Lock()
 	defer c.ws.eventMu.Unlock()
@@ -76,7 +71,7 @@ func (c *RoomChat) serveMentionHTTP(w http.ResponseWriter, r *http.Request, room
 		writeRoomChatJSON(w, http.StatusOK, map[string]any{"items": items})
 	case "/api/room-chat/mentions/status":
 		id := r.URL.Query().Get("event_id")
-		if !validMentionID(id) {
+		if !protocol.ValidMentionEventID(id) {
 			http.Error(w, "invalid mention event ID", http.StatusBadRequest)
 			return
 		}
@@ -97,7 +92,7 @@ func (c *RoomChat) serveMentionHTTP(w http.ResponseWriter, r *http.Request, room
 		if !readRoomChatBody(w, r, 4096, &input) {
 			return
 		}
-		if !validMentionID(input.EventID) || !c.validMentionProof(input.Proof, room, actor, input.EventID, time.Now()) {
+		if !protocol.ValidMentionEventID(input.EventID) || !c.validMentionProof(input.Proof, room, actor, input.EventID, time.Now()) {
 			http.Error(w, "mention delivery not confirmed", http.StatusForbidden)
 			return
 		}
@@ -146,7 +141,7 @@ func (c *RoomChat) nextAgentMention(ctx context.Context, room string, actor prot
 
 func (c *RoomChat) agentMentionReply(ctx context.Context, room string, actor protocol.Actor, token string, input protocol.MentionReply) (protocol.Event, string) {
 	id, err := uuid.Parse(input.MessageID)
-	if !validMentionID(input.EventID) || err != nil || id.Version() != 4 || id.String() != input.MessageID ||
+	if !protocol.ValidMentionEventID(input.EventID) || err != nil || id.Version() != 4 || id.String() != input.MessageID ||
 		!validRoomChatText(input.Text, c.legacy, token) {
 		return protocol.Event{}, "invalid_mention_reply"
 	}
